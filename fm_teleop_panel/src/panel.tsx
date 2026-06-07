@@ -53,6 +53,23 @@ const ROBOTS: Record<string, RobotConfig> = {
     enableCartesian: true,
     cartesianNote: "5-DOF: translation tracks, orientation drifts",
   },
+  // G1-D: Servo drives the 7-joint right_arm group (waist/legs/left arm hold). The
+  // 7-DOF arm spans SE(3), so full 6-DOF Cartesian works. The wheeled base is driven
+  // separately (Twist -> AGV), not from this panel.
+  g1_d: {
+    label: "G1-D (right arm)",
+    commandFrame: "torso_link",
+    joints: [
+      "right_shoulder_pitch_joint",
+      "right_shoulder_roll_joint",
+      "right_shoulder_yaw_joint",
+      "right_elbow_joint",
+      "right_wrist_roll_joint",
+      "right_wrist_pitch_joint",
+      "right_wrist_yaw_joint",
+    ],
+    enableCartesian: true,
+  },
 };
 
 const DEFAULT_ROBOT = "openarm";
