@@ -67,6 +67,26 @@ function mergeInto(acc: Contribution, add: Contribution): void {
   }
 }
 
+// Scale a contribution's magnitude by `factor` (the panel speed scalar, 0..1).
+// Returns a new contribution; the source is untouched.
+export function scaleContribution(c: Contribution, factor: number): Contribution {
+  switch (c.kind) {
+    case "twistStamped":
+    case "twist": {
+      const linear = { x: c.linear.x * factor, y: c.linear.y * factor, z: c.linear.z * factor };
+      const angular = { x: c.angular.x * factor, y: c.angular.y * factor, z: c.angular.z * factor };
+      return { ...c, linear, angular };
+    }
+    case "jointJog": {
+      const velocities: Record<string, number> = {};
+      for (const [joint, v] of Object.entries(c.velocities)) {
+        velocities[joint] = v * factor;
+      }
+      return { ...c, velocities };
+    }
+  }
+}
+
 // Build the ROS message for a merged contribution, stamped now.
 export function toMessage(c: Contribution, stamp: Stamp): unknown {
   switch (c.kind) {

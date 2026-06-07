@@ -29,6 +29,7 @@ export function Joystick({ size, deadzone, onChange, label }: JoystickProps): Re
   const live = radius - knobR; // travel left for the knob centre
   const ref = useRef<SVGSVGElement>(null);
   const [knob, setKnob] = useState<Vec2>({ x: 0, y: 0 });
+  const [out, setOut] = useState<Vec2>({ x: 0, y: 0 }); // live readout
 
   const handle = (e: ReactPointerEvent<SVGSVGElement>) => {
     const svg = ref.current;
@@ -37,12 +38,15 @@ export function Joystick({ size, deadzone, onChange, label }: JoystickProps): Re
     const dx = e.clientX - (rect.left + radius);
     const dy = e.clientY - (rect.top + radius);
     setKnob(clampToRadius(dx, dy, live)); // clamp the visual knob to the rim
-    onChange(stickVector(dx, dy, live, deadzone));
+    const v = stickVector(dx, dy, live, deadzone);
+    setOut(v);
+    onChange(v);
   };
 
   const release = (e: ReactPointerEvent<SVGSVGElement>) => {
     e.currentTarget.releasePointerCapture?.(e.pointerId);
     setKnob({ x: 0, y: 0 });
+    setOut({ x: 0, y: 0 });
     onChange({ x: 0, y: 0 });
   };
 
@@ -70,6 +74,7 @@ export function Joystick({ size, deadzone, onChange, label }: JoystickProps): Re
         <circle cx={radius + knob.x} cy={radius + knob.y} r={knobR} fill="#4a90d9" stroke="#7ab" />
       </svg>
       {label && <figcaption style={{ fontSize: "0.7rem", opacity: 0.7 }}>{label}</figcaption>}
+      <Readout text={`${fmt(out.x)} · ${fmt(out.y)}`} />
     </figure>
   );
 }
@@ -88,6 +93,7 @@ export function ThumbStick({ width, height, deadzone, onChange, label }: ThumbSt
   const live = height / 2 - knobR; // vertical travel for the knob centre
   const ref = useRef<SVGSVGElement>(null);
   const [knobY, setKnobY] = useState(0);
+  const [out, setOut] = useState(0); // live readout
 
   const handle = (e: ReactPointerEvent<SVGSVGElement>) => {
     const svg = ref.current;
@@ -96,12 +102,15 @@ export function ThumbStick({ width, height, deadzone, onChange, label }: ThumbSt
     const dy = e.clientY - (rect.top + height / 2);
     const clamped = Math.max(-live, Math.min(live, dy));
     setKnobY(clamped);
-    onChange(stickVector(0, dy, live, deadzone).y);
+    const value = stickVector(0, dy, live, deadzone).y;
+    setOut(value);
+    onChange(value);
   };
 
   const release = (e: ReactPointerEvent<SVGSVGElement>) => {
     e.currentTarget.releasePointerCapture?.(e.pointerId);
     setKnobY(0);
+    setOut(0);
     onChange(0);
   };
 
@@ -135,6 +144,19 @@ export function ThumbStick({ width, height, deadzone, onChange, label }: ThumbSt
         <circle cx={width / 2} cy={height / 2 + knobY} r={knobR} fill="#4a90d9" stroke="#7ab" />
       </svg>
       {label && <figcaption style={{ fontSize: "0.7rem", opacity: 0.7 }}>{label}</figcaption>}
+      <Readout text={fmt(out)} />
     </figure>
+  );
+}
+
+// Signed, fixed-width value for the live readout (e.g. "+0.42", "−1.00").
+function fmt(v: number): string {
+  const s = v.toFixed(2);
+  return v < 0 ? s.replace("-", "−") : `+${s}`;
+}
+
+function Readout({ text }: { text: string }): ReactElement {
+  return (
+    <div style={{ fontSize: "0.65rem", opacity: 0.6, fontVariantNumeric: "tabular-nums" }}>{text}</div>
   );
 }

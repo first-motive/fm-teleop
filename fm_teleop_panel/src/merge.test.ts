@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   Contribution,
   mergeContributions,
+  scaleContribution,
   toMessage,
   twistAxis,
   twistStampedAxis,
@@ -82,6 +83,41 @@ describe("mergeContributions", () => {
   it("does not mutate source contributions", () => {
     const src = twistStampedAxis(ARM, FRAME, "linear", "x", 1);
     mergeContributions([src, twistStampedAxis(ARM, FRAME, "linear", "x", 1)]);
+    if (src.kind !== "twistStamped") throw new Error("expected twistStamped");
+    expect(src.linear.x).toBe(1);
+  });
+});
+
+describe("scaleContribution", () => {
+  it("scales twist magnitude by the factor", () => {
+    const scaled = scaleContribution(twistStampedAxis(ARM, FRAME, "linear", "x", 1), 0.4);
+    if (scaled.kind !== "twistStamped") throw new Error("expected twistStamped");
+    expect(scaled.linear.x).toBeCloseTo(0.4);
+  });
+
+  it("scales every component of a twist", () => {
+    const scaled = scaleContribution(
+      { kind: "twist", topic: "/cmd_vel", linear: { x: 1, y: 0.5, z: 0 }, angular: { x: 0, y: 0, z: -1 } },
+      0.4,
+    );
+    if (scaled.kind !== "twist") throw new Error("expected twist");
+    expect(scaled.linear.x).toBeCloseTo(0.4);
+    expect(scaled.linear.y).toBeCloseTo(0.2);
+    expect(scaled.angular.z).toBeCloseTo(-0.4);
+  });
+
+  it("scales jointJog velocities", () => {
+    const scaled = scaleContribution(
+      { kind: "jointJog", topic: "/jog", frame: FRAME, velocities: { j1: 1, j2: -2 } },
+      0.5,
+    );
+    if (scaled.kind !== "jointJog") throw new Error("expected jointJog");
+    expect(scaled.velocities).toEqual({ j1: 0.5, j2: -1 });
+  });
+
+  it("does not mutate the source", () => {
+    const src = twistStampedAxis(ARM, FRAME, "linear", "x", 1);
+    scaleContribution(src, 0.4);
     if (src.kind !== "twistStamped") throw new Error("expected twistStamped");
     expect(src.linear.x).toBe(1);
   });

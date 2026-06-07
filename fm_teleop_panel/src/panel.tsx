@@ -21,13 +21,12 @@ import { ReactElement, useEffect, useLayoutEffect, useRef, useState } from "reac
 import { createRoot } from "react-dom/client";
 
 import { Joystick, ThumbStick } from "./joystick";
-import { Contribution, mergeContributions, toMessage, Vec3 } from "./merge";
+import { Contribution, mergeContributions, scaleContribution, toMessage, Vec3 } from "./merge";
 
 const REPEAT_MS = 50;
 
-// Joystick centre deadzone, as a fraction of full deflection. The panel settings
-// will make this adjustable (step 5); a small fixed default keeps resting drift
-// out until then.
+// Default joystick centre deadzone (fraction of full deflection) for a fresh
+// panel; the operator overrides it in the panel settings. Keeps resting drift out.
 const DEFAULT_DEADZONE = 0.08;
 
 const STICK_SIZE = 140; // primary joystick diameter, px
@@ -185,6 +184,13 @@ const DEFAULT_ROBOT = "openarm";
 
 type Stamp = { sec: number; nsec: number };
 
+// Persisted panel state (Foxglove saveState / initialState).
+type PanelState = { robot?: string; speed?: number; deadzone?: number };
+
+function clamp01(v: number): number {
+  return Math.max(0, Math.min(1, v));
+}
+
 function robotConfig(key: string): RobotConfig {
   return ROBOTS[key] ?? ROBOTS[DEFAULT_ROBOT]!;
 }
@@ -209,10 +215,19 @@ function advertisedTopics(cfg: RobotConfig): Array<{ topic: string; schema: stri
 
 function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElement {
   const [renderDone, setRenderDone] = useState<(() => void) | undefined>();
-  const initialRobot = (context.initialState as { robot?: string } | undefined)?.robot;
+  const persisted = context.initialState as PanelState | undefined;
   const [robot, setRobot] = useState<string>(
-    initialRobot && ROBOTS[initialRobot] ? initialRobot : DEFAULT_ROBOT,
+    persisted?.robot && ROBOTS[persisted.robot] ? persisted.robot : DEFAULT_ROBOT,
   );
+  // Speed scalar (0..1) multiplies every published command magnitude; deadzone
+  // is the joystick centre dead band. Both persist and are set in panel settings.
+  const [speed, setSpeed] = useState<number>(clamp01(persisted?.speed ?? 1));
+  const [deadzone, setDeadzone] = useState<number>(clamp01(persisted?.deadzone ?? DEFAULT_DEADZONE));
+  // speedRef mirrors speed so the publish timer reads the live value without
+  // re-arming the interval (its effect dep is [context] only). Deadzone needs no
+  // such ref — it is passed as a prop and applied per pointer event by each stick.
+  const speedRef = useRef(speed);
+  speedRef.current = speed;
   const cfg = robotConfig(robot);
   // Active contributions keyed by widget id. Many widgets can be held at once
   // (two-thumb teleop); the repeat timer merges them per topic and publishes.
@@ -243,15 +258,27 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
     held.current.clear();
   }, [cfg]);
 
-  // Robot picker lives in the panel settings editor; persist the choice.
+  // Robot picker, speed scalar, and deadzone live in the panel settings editor;
+  // every change persists the full state so a reload restores it.
   useEffect(() => {
     const actionHandler = (action: SettingsTreeAction) => {
-      if (action.action === "update" && action.payload.path[0] === "general" &&
-          action.payload.path[1] === "robot") {
+      if (action.action !== "update" || action.payload.path[0] !== "general") {
+        return;
+      }
+      const field = action.payload.path[1];
+      if (field === "robot") {
         const next = action.payload.value as string;
         held.current.clear();
         setRobot(next);
-        context.saveState({ robot: next });
+        context.saveState({ robot: next, speed, deadzone } satisfies PanelState);
+      } else if (field === "speed") {
+        const next = clamp01(action.payload.value as number);
+        setSpeed(next);
+        context.saveState({ robot, speed: next, deadzone } satisfies PanelState);
+      } else if (field === "deadzone") {
+        const next = clamp01(action.payload.value as number);
+        setDeadzone(next);
+        context.saveState({ robot, speed, deadzone: next } satisfies PanelState);
       }
     };
     context.updatePanelSettingsEditor({
@@ -266,11 +293,27 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
               value: robot,
               options: Object.entries(ROBOTS).map(([key, c]) => ({ label: c.label, value: key })),
             },
+            speed: {
+              label: "Speed scalar",
+              input: "number",
+              value: speed,
+              min: 0,
+              max: 1,
+              step: 0.05,
+            },
+            deadzone: {
+              label: "Joystick deadzone",
+              input: "number",
+              value: deadzone,
+              min: 0,
+              max: 0.9,
+              step: 0.01,
+            },
           },
         },
       },
     });
-  }, [context, robot]);
+  }, [context, robot, speed, deadzone]);
 
   // Re-publish held commands on a timer so motion continues while widgets are held.
   // All active contributions merge per topic, so two-thumb drags publish together.
@@ -279,8 +322,9 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
       const active = held.current;
       if (active.size === 0) return;
       const stamp = nowStamp();
+      const factor = speedRef.current;
       for (const c of mergeContributions(active.values())) {
-        context.publish?.(c.topic, toMessage(c, stamp));
+        context.publish?.(c.topic, toMessage(scaleContribution(c, factor), stamp));
       }
     }, REPEAT_MS);
     return () => clearInterval(timer);
@@ -300,6 +344,13 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
     held.current.clear();
   };
 
+  // Speed slider in the dashboard header mirrors the settings field; both persist.
+  const onSpeedChange = (v: number) => {
+    const next = clamp01(v);
+    setSpeed(next);
+    context.saveState({ robot, speed: next, deadzone } satisfies PanelState);
+  };
+
   const publishPreset = (hand: HandSide, name: string) => {
     context.publish?.(hand.presetTopic, { data: name });
   };
@@ -317,77 +368,141 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
     });
   };
 
+  const hands = cfg.hands ?? [];
+
   return (
-    <div style={{ padding: "0.75rem", fontFamily: "sans-serif" }}>
-      <h3 style={{ marginTop: 0 }}>{cfg.label} Teleop</h3>
+    <div
+      style={{
+        padding: "0.75rem",
+        fontFamily: "sans-serif",
+        display: "flex",
+        flexDirection: "column",
+        gap: "0.75rem",
+      }}
+    >
+      {/* Dashboard header: title, always-reachable global STOP, speed scalar. */}
+      <header style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+        <h3 style={{ margin: 0, flex: 1 }}>{cfg.label} Teleop</h3>
+        <button
+          onClick={stop}
+          style={{
+            background: "#c0392b",
+            color: "#fff",
+            border: "none",
+            borderRadius: "0.25rem",
+            padding: "0.5rem 1.25rem",
+            fontWeight: "bold",
+            cursor: "pointer",
+          }}
+        >
+          STOP
+        </button>
+        <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.8rem" }}>
+          Speed
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={speed}
+            onChange={(e) => onSpeedChange(parseFloat(e.target.value))}
+          />
+          <span style={{ width: "2.5rem", textAlign: "right" }}>{Math.round(speed * 100)}%</span>
+        </label>
+      </header>
 
-      {cfg.arms.map((arm) => (
-        <div key={arm.key}>
-          <h4 style={{ margin: "0.5rem 0 0.25rem" }}>{arm.label}</h4>
-          {arm.enableCartesian && (
-            <Section title={`Cartesian (m/s · rad/s, unitless)${arm.cartesianNote ? ` — ${arm.cartesianNote}` : ""}`}>
-              <ArmCartesianSticks arm={arm} setHeld={setHeld} clearHeld={clearHeld} />
+      {/* Primary controls: arm Cartesian sticks + base, always on, in a grid that
+          reflows from two-up on a tablet to one column on a phone. */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+          gap: "0.75rem",
+        }}
+      >
+        {cfg.arms.map((arm) => (
+          <section key={arm.key}>
+            <h4 style={{ margin: "0 0 0.25rem" }}>{arm.label}</h4>
+            {arm.enableCartesian && (
+              <Section title={`Cartesian (unitless)${arm.cartesianNote ? ` — ${arm.cartesianNote}` : ""}`}>
+                <ArmCartesianSticks arm={arm} deadzone={deadzone} setHeld={setHeld} clearHeld={clearHeld} />
+              </Section>
+            )}
+            <details>
+              <summary style={{ fontSize: "0.8rem", opacity: 0.7, cursor: "pointer" }}>Per-joint</summary>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem", marginTop: "0.25rem" }}>
+                {arm.joints.map((joint, i) => {
+                  const id = `${arm.key}-joint-${joint}`;
+                  return (
+                    <JogButton
+                      key={joint}
+                      label={`j${i + 1}`}
+                      onDown={(sign) =>
+                        setHeld(id, {
+                          kind: "jointJog",
+                          topic: arm.jointTopic,
+                          frame: arm.commandFrame,
+                          velocities: { [joint]: sign },
+                        })
+                      }
+                      onUp={() => clearHeld(id)}
+                    />
+                  );
+                })}
+              </div>
+            </details>
+          </section>
+        ))}
+
+        {cfg.base && (
+          <section>
+            <h4 style={{ margin: "0 0 0.25rem" }}>{cfg.base.label}</h4>
+            <Section title={cfg.base.note ?? "Base"}>
+              <BaseJoystick base={cfg.base} deadzone={deadzone} setHeld={setHeld} clearHeld={clearHeld} />
             </Section>
-          )}
-          <details>
-            <summary style={{ fontSize: "0.8rem", opacity: 0.7, cursor: "pointer" }}>Per-joint</summary>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem", marginTop: "0.25rem" }}>
-              {arm.joints.map((joint, i) => {
-                const id = `${arm.key}-joint-${joint}`;
-                return (
-                  <JogButton
-                    key={joint}
-                    label={`j${i + 1}`}
-                    onDown={(sign) =>
-                      setHeld(id, {
-                        kind: "jointJog",
-                        topic: arm.jointTopic,
-                        frame: arm.commandFrame,
-                        velocities: { [joint]: sign },
-                      })
-                    }
-                    onUp={() => clearHeld(id)}
-                  />
-                );
-              })}
-            </div>
-          </details>
-        </div>
-      ))}
+          </section>
+        )}
+      </div>
 
-      {cfg.base && (
-        <div>
-          <h4 style={{ margin: "0.5rem 0 0.25rem" }}>{cfg.base.label}</h4>
-          <Section title={cfg.base.note ?? "Base"}>
-            <BaseJoystick base={cfg.base} setHeld={setHeld} clearHeld={clearHeld} />
-          </Section>
-        </div>
+      {/* Secondary controls: hand presets + per-finger sliders, collapsed by default. */}
+      {hands.length > 0 && (
+        <details>
+          <summary style={{ fontSize: "0.85rem", cursor: "pointer" }}>Hands</summary>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+              gap: "0.75rem",
+              marginTop: "0.5rem",
+            }}
+          >
+            {hands.map((hand) => (
+              <div key={hand.key}>
+                <h4 style={{ margin: "0 0 0.25rem" }}>{hand.label}</h4>
+                <Section title="Presets">
+                  {HAND_PRESETS.map((name) => (
+                    <button key={name} onClick={() => publishPreset(hand, name)}>
+                      {name}
+                    </button>
+                  ))}
+                </Section>
+                <Section title="Sliders (rad)">
+                  {hand.joints.map((joint, i) => (
+                    <FingerSlider
+                      key={joint.name}
+                      label={shortJoint(joint.name)}
+                      min={joint.min}
+                      max={joint.max}
+                      value={handValues[hand.key]?.[i] ?? 0}
+                      onChange={(v) => publishSlider(hand, i, v)}
+                    />
+                  ))}
+                </Section>
+              </div>
+            ))}
+          </div>
+        </details>
       )}
-
-      {(cfg.hands ?? []).map((hand) => (
-        <div key={hand.key}>
-          <h4 style={{ margin: "0.5rem 0 0.25rem" }}>{hand.label}</h4>
-          <Section title="Presets">
-            {HAND_PRESETS.map((name) => (
-              <button key={name} onClick={() => publishPreset(hand, name)}>
-                {name}
-              </button>
-            ))}
-          </Section>
-          <Section title="Sliders (rad)">
-            {hand.joints.map((joint, i) => (
-              <FingerSlider
-                key={joint.name}
-                label={shortJoint(joint.name)}
-                min={joint.min}
-                max={joint.max}
-                value={handValues[hand.key]?.[i] ?? 0}
-                onChange={(v) => publishSlider(hand, i, v)}
-              />
-            ))}
-          </Section>
-        </div>
-      ))}
     </div>
   );
 }
@@ -440,10 +555,12 @@ function JogButton({
 // base command times out to a stop.
 function BaseJoystick({
   base,
+  deadzone,
   setHeld,
   clearHeld,
 }: {
   base: BaseConfig;
+  deadzone: number;
   setHeld: (id: string, c: Contribution) => void;
   clearHeld: (id: string) => void;
 }): ReactElement {
@@ -452,7 +569,7 @@ function BaseJoystick({
     <div style={{ display: "flex", gap: "1rem", alignItems: "center", flexWrap: "wrap" }}>
       <Joystick
         size={STICK_SIZE}
-        deadzone={DEFAULT_DEADZONE}
+        deadzone={deadzone}
         label="vx ↑ · vyaw ↔"
         onChange={(v) => {
           if (v.x === 0 && v.y === 0) {
@@ -473,7 +590,7 @@ function BaseJoystick({
         <ThumbStick
           width={THUMB_WIDTH}
           height={STICK_SIZE}
-          deadzone={DEFAULT_DEADZONE}
+          deadzone={deadzone}
           label="vy"
           onChange={(value) => {
             if (value === 0) {
@@ -502,10 +619,12 @@ function BaseJoystick({
 // Each stick clears its contribution at rest so Servo times the jog out to a hold.
 function ArmCartesianSticks({
   arm,
+  deadzone,
   setHeld,
   clearHeld,
 }: {
   arm: ArmGroup;
+  deadzone: number;
   setHeld: (id: string, c: Contribution) => void;
   clearHeld: (id: string) => void;
 }): ReactElement {
@@ -524,7 +643,7 @@ function ArmCartesianSticks({
       <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
         <Joystick
           size={STICK_SIZE}
-          deadzone={DEFAULT_DEADZONE}
+          deadzone={deadzone}
           label="translate (x↑ · y↔)"
           onChange={(v) => {
             if (v.x === 0 && v.y === 0) {
@@ -538,7 +657,7 @@ function ArmCartesianSticks({
         <ThumbStick
           width={THUMB_WIDTH}
           height={STICK_SIZE}
-          deadzone={DEFAULT_DEADZONE}
+          deadzone={deadzone}
           label="Z"
           onChange={(value) => {
             if (value === 0) {
@@ -552,7 +671,7 @@ function ArmCartesianSticks({
       <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
         <Joystick
           size={STICK_SIZE}
-          deadzone={DEFAULT_DEADZONE}
+          deadzone={deadzone}
           label="rotate (pitch↕ · yaw↔)"
           onChange={(v) => {
             if (v.x === 0 && v.y === 0) {
@@ -566,7 +685,7 @@ function ArmCartesianSticks({
         <ThumbStick
           width={THUMB_WIDTH}
           height={STICK_SIZE}
-          deadzone={DEFAULT_DEADZONE}
+          deadzone={deadzone}
           label="roll"
           onChange={(value) => {
             if (value === 0) {
