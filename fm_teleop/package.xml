@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>fm_teleop</name>
+  <version>0.0.0</version>
+  <description>First Motive teleop source layer: metapackage grouping every teleop input behind one command contract (split-ready)</description>
+  <maintainer email="nish@ubundi.co.za">First Motive</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>fm_teleop_core</exec_depend>
+  <exec_depend>fm_teleop_device</exec_depend>
+  <exec_depend>fm_teleop_leader</exec_depend>
+  <exec_depend>fm_teleop_vr</exec_depend>
+  <exec_depend>fm_teleop_vision</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
