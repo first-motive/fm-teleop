@@ -20,6 +20,14 @@ import { ExtensionContext, PanelExtensionContext, SettingsTreeAction } from "@fo
 import { ReactElement, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
+import {
+  Contribution,
+  mergeContributions,
+  toMessage,
+  twistAxis,
+  twistStampedAxis,
+} from "./merge";
+
 const REPEAT_MS = 50;
 
 // One Servo-driven arm. `commandFrame` must match servo.yaml's robot_link_command_frame;
@@ -205,8 +213,9 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
     initialRobot && ROBOTS[initialRobot] ? initialRobot : DEFAULT_ROBOT,
   );
   const cfg = robotConfig(robot);
-  // Active held command (arm twist/joint or base twist), refreshed by the repeat timer.
-  const held = useRef<{ topic: string; make: (stamp: Stamp) => unknown } | undefined>();
+  // Active contributions keyed by widget id. Many widgets can be held at once
+  // (two-thumb teleop); the repeat timer merges them per topic and publishes.
+  const held = useRef<Map<string, Contribution>>(new Map());
   // Per-hand slider vectors (one entry per finger joint), keyed by hand.key.
   const [handValues, setHandValues] = useState<Record<string, number[]>>({});
 
@@ -230,7 +239,7 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
       next[hand.key] = hand.joints.map(() => 0);
     }
     setHandValues(next);
-    held.current = undefined;
+    held.current.clear();
   }, [cfg]);
 
   // Robot picker lives in the panel settings editor; persist the choice.
@@ -239,7 +248,7 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
       if (action.action === "update" && action.payload.path[0] === "general" &&
           action.payload.path[1] === "robot") {
         const next = action.payload.value as string;
-        held.current = undefined;
+        held.current.clear();
         setRobot(next);
         context.saveState({ robot: next });
       }
@@ -262,20 +271,32 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
     });
   }, [context, robot]);
 
-  // Re-publish the held command on a timer so motion continues while a button is pressed.
+  // Re-publish held commands on a timer so motion continues while widgets are held.
+  // All active contributions merge per topic, so two-thumb drags publish together.
   useEffect(() => {
     const timer = setInterval(() => {
-      const cmd = held.current;
-      if (!cmd) return;
-      context.publish?.(cmd.topic, cmd.make(nowStamp()));
+      const active = held.current;
+      if (active.size === 0) return;
+      const stamp = nowStamp();
+      for (const c of mergeContributions(active.values())) {
+        context.publish?.(c.topic, toMessage(c, stamp));
+      }
     }, REPEAT_MS);
     return () => clearInterval(timer);
   }, [context]);
 
   useEffect(() => renderDone?.(), [renderDone]);
 
+  // Widgets register their contribution by a stable id on press, and clear it on
+  // release. stop() drops every active contribution at once (the global STOP).
+  const setHeld = (id: string, c: Contribution) => {
+    held.current.set(id, c);
+  };
+  const clearHeld = (id: string) => {
+    held.current.delete(id);
+  };
   const stop = () => {
-    held.current = undefined;
+    held.current.clear();
   };
 
   const publishPreset = (hand: HandSide, name: string) => {
@@ -305,36 +326,41 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
           {arm.enableCartesian && (
             <Section title={`Cartesian (m/s · rad/s, unitless)${arm.cartesianNote ? ` — ${arm.cartesianNote}` : ""}`}>
               {(["linear", "angular"] as Axis[]).map((axis) =>
-                (["x", "y", "z"] as Field[]).map((field) => (
-                  <JogButton
-                    key={`${axis}-${field}`}
-                    label={`${axis[0]}${field}`}
-                    onDown={(sign) => {
-                      held.current = {
-                        topic: arm.servoTopic,
-                        make: (stamp) => twistMsg(stamp, arm.commandFrame, axis, field, sign),
-                      };
-                    }}
-                    onUp={stop}
-                  />
-                )),
+                (["x", "y", "z"] as Field[]).map((field) => {
+                  const id = `${arm.key}-cart-${axis}-${field}`;
+                  return (
+                    <JogButton
+                      key={`${axis}-${field}`}
+                      label={`${axis[0]}${field}`}
+                      onDown={(sign) =>
+                        setHeld(id, twistStampedAxis(arm.servoTopic, arm.commandFrame, axis, field, sign))
+                      }
+                      onUp={() => clearHeld(id)}
+                    />
+                  );
+                }),
               )}
             </Section>
           )}
           <Section title="Per-joint">
-            {arm.joints.map((joint, i) => (
-              <JogButton
-                key={joint}
-                label={`j${i + 1}`}
-                onDown={(sign) => {
-                  held.current = {
-                    topic: arm.jointTopic,
-                    make: (stamp) => jointMsg(stamp, arm.commandFrame, joint, sign),
-                  };
-                }}
-                onUp={stop}
-              />
-            ))}
+            {arm.joints.map((joint, i) => {
+              const id = `${arm.key}-joint-${joint}`;
+              return (
+                <JogButton
+                  key={joint}
+                  label={`j${i + 1}`}
+                  onDown={(sign) =>
+                    setHeld(id, {
+                      kind: "jointJog",
+                      topic: arm.jointTopic,
+                      frame: arm.commandFrame,
+                      velocities: { [joint]: sign },
+                    })
+                  }
+                  onUp={() => clearHeld(id)}
+                />
+              );
+            })}
           </Section>
         </div>
       ))}
@@ -343,11 +369,11 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
         <div>
           <h4 style={{ margin: "0.5rem 0 0.25rem" }}>{cfg.base.label}</h4>
           <Section title={cfg.base.note ?? "Base"}>
-            <BaseJog field="x" axis="linear" label="vx" held={held} topic={cfg.base.cmdVelTopic} onUp={stop} />
+            <BaseJog field="x" axis="linear" label="vx" topic={cfg.base.cmdVelTopic} setHeld={setHeld} clearHeld={clearHeld} />
             {cfg.base.enableVy && (
-              <BaseJog field="y" axis="linear" label="vy" held={held} topic={cfg.base.cmdVelTopic} onUp={stop} />
+              <BaseJog field="y" axis="linear" label="vy" topic={cfg.base.cmdVelTopic} setHeld={setHeld} clearHeld={clearHeld} />
             )}
-            <BaseJog field="z" axis="angular" label="vyaw" held={held} topic={cfg.base.cmdVelTopic} onUp={stop} />
+            <BaseJog field="z" axis="angular" label="vyaw" topic={cfg.base.cmdVelTopic} setHeld={setHeld} clearHeld={clearHeld} />
           </Section>
         </div>
       )}
@@ -383,31 +409,6 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
 function nowStamp(): Stamp {
   const now = Date.now();
   return { sec: Math.floor(now / 1000), nsec: (now % 1000) * 1e6 };
-}
-
-function twistMsg(stamp: Stamp, frame: string, axis: Axis, field: Field, value: number) {
-  const linear = { x: 0, y: 0, z: 0 };
-  const angular = { x: 0, y: 0, z: 0 };
-  (axis === "linear" ? linear : angular)[field] = value;
-  return { header: { stamp, frame_id: frame }, twist: { linear, angular } };
-}
-
-function jointMsg(stamp: Stamp, frame: string, joint: string, value: number) {
-  return {
-    header: { stamp, frame_id: frame },
-    joint_names: [joint],
-    velocities: [value],
-    displacements: [],
-    duration: 0,
-  };
-}
-
-// geometry_msgs/Twist for the wheeled base (no header). field selects vx / vy / vyaw.
-function baseTwistMsg(axis: Axis, field: Field, value: number) {
-  const linear = { x: 0, y: 0, z: 0 };
-  const angular = { x: 0, y: 0, z: 0 };
-  (axis === "linear" ? linear : angular)[field] = value;
-  return { linear, angular };
 }
 
 function shortJoint(name: string): string {
@@ -446,29 +447,28 @@ function JogButton({
   );
 }
 
-// Base jog button pair, wired to publish a geometry_msgs/Twist on the held timer.
+// Base jog button pair, contributing a geometry_msgs/Twist axis on the held timer.
 function BaseJog({
   label,
   axis,
   field,
   topic,
-  held,
-  onUp,
+  setHeld,
+  clearHeld,
 }: {
   label: string;
   axis: Axis;
   field: Field;
   topic: string;
-  held: React.MutableRefObject<{ topic: string; make: (stamp: Stamp) => unknown } | undefined>;
-  onUp: () => void;
+  setHeld: (id: string, c: Contribution) => void;
+  clearHeld: (id: string) => void;
 }): ReactElement {
+  const id = `base-${field}`;
   return (
     <JogButton
       label={label}
-      onDown={(sign) => {
-        held.current = { topic, make: () => baseTwistMsg(axis, field, sign) };
-      }}
-      onUp={onUp}
+      onDown={(sign) => setHeld(id, twistAxis(topic, axis, field, sign))}
+      onUp={() => clearHeld(id)}
     />
   );
 }
