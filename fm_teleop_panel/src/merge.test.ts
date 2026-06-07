@@ -46,6 +46,20 @@ describe("mergeContributions", () => {
     expect(c.linear.x).toBeCloseTo(0.7);
   });
 
+  it("sums two base twist contributions on /cmd_vel (drive vx + strafe vy)", () => {
+    // Mirrors BaseJoystick: drive stick writes vx + vyaw, the strafe thumb writes
+    // vy; both land on /cmd_vel and must merge into one Twist.
+    const merged = mergeContributions([
+      { kind: "twist", topic: "/cmd_vel", linear: { x: 0.6, y: 0, z: 0 }, angular: { x: 0, y: 0, z: -0.4 } },
+      { kind: "twist", topic: "/cmd_vel", linear: { x: 0, y: 0.3, z: 0 }, angular: { x: 0, y: 0, z: 0 } },
+    ]);
+    expect(merged).toHaveLength(1);
+    const c = merged[0]!;
+    if (c.kind !== "twist") throw new Error("expected twist");
+    expect(c.linear).toEqual({ x: 0.6, y: 0.3, z: 0 });
+    expect(c.angular.z).toBeCloseTo(-0.4);
+  });
+
   it("merges jointJog velocities by name, summing on collision", () => {
     const a: Contribution = {
       kind: "jointJog",

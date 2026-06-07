@@ -20,15 +20,18 @@ import { ExtensionContext, PanelExtensionContext, SettingsTreeAction } from "@fo
 import { ReactElement, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import {
-  Contribution,
-  mergeContributions,
-  toMessage,
-  twistAxis,
-  twistStampedAxis,
-} from "./merge";
+import { Joystick, ThumbStick } from "./joystick";
+import { Contribution, mergeContributions, toMessage, twistStampedAxis } from "./merge";
 
 const REPEAT_MS = 50;
+
+// Joystick centre deadzone, as a fraction of full deflection. The panel settings
+// will make this adjustable (step 5); a small fixed default keeps resting drift
+// out until then.
+const DEFAULT_DEADZONE = 0.08;
+
+const STICK_SIZE = 140; // primary joystick diameter, px
+const THUMB_WIDTH = 48; // 1-axis thumb track width, px
 
 // One Servo-driven arm. `commandFrame` must match servo.yaml's robot_link_command_frame;
 // `joints` must match the Servo group's joints in order. `servoTopic`/`jointTopic` are the
@@ -369,11 +372,7 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
         <div>
           <h4 style={{ margin: "0.5rem 0 0.25rem" }}>{cfg.base.label}</h4>
           <Section title={cfg.base.note ?? "Base"}>
-            <BaseJog field="x" axis="linear" label="vx" topic={cfg.base.cmdVelTopic} setHeld={setHeld} clearHeld={clearHeld} />
-            {cfg.base.enableVy && (
-              <BaseJog field="y" axis="linear" label="vy" topic={cfg.base.cmdVelTopic} setHeld={setHeld} clearHeld={clearHeld} />
-            )}
-            <BaseJog field="z" axis="angular" label="vyaw" topic={cfg.base.cmdVelTopic} setHeld={setHeld} clearHeld={clearHeld} />
+            <BaseJoystick base={cfg.base} setHeld={setHeld} clearHeld={clearHeld} />
           </Section>
         </div>
       )}
@@ -447,29 +446,63 @@ function JogButton({
   );
 }
 
-// Base jog button pair, contributing a geometry_msgs/Twist axis on the held timer.
-function BaseJog({
-  label,
-  axis,
-  field,
-  topic,
+// Base drive on one joystick: push up for forward (vx), push sideways to turn
+// (vyaw). A holonomic base adds a vertical thumb for lateral strafe (vy). Each
+// control writes a geometry_msgs/Twist contribution; the timer merges and
+// publishes them on /cmd_vel. A control at rest clears its contribution so the
+// base command times out to a stop.
+function BaseJoystick({
+  base,
   setHeld,
   clearHeld,
 }: {
-  label: string;
-  axis: Axis;
-  field: Field;
-  topic: string;
+  base: BaseConfig;
   setHeld: (id: string, c: Contribution) => void;
   clearHeld: (id: string) => void;
 }): ReactElement {
-  const id = `base-${field}`;
+  const topic = base.cmdVelTopic;
   return (
-    <JogButton
-      label={label}
-      onDown={(sign) => setHeld(id, twistAxis(topic, axis, field, sign))}
-      onUp={() => clearHeld(id)}
-    />
+    <div style={{ display: "flex", gap: "1rem", alignItems: "center", flexWrap: "wrap" }}>
+      <Joystick
+        size={STICK_SIZE}
+        deadzone={DEFAULT_DEADZONE}
+        label="vx ↑ · vyaw ↔"
+        onChange={(v) => {
+          if (v.x === 0 && v.y === 0) {
+            clearHeld("base-drive");
+            return;
+          }
+          // Stick up (v.y > 0) drives forward; stick right (v.x > 0) yaws right,
+          // which is negative angular.z under REP-103 (z up, +yaw is CCW/left).
+          setHeld("base-drive", {
+            kind: "twist",
+            topic,
+            linear: { x: v.y, y: 0, z: 0 },
+            angular: { x: 0, y: 0, z: -v.x },
+          });
+        }}
+      />
+      {base.enableVy && (
+        <ThumbStick
+          width={THUMB_WIDTH}
+          height={STICK_SIZE}
+          deadzone={DEFAULT_DEADZONE}
+          label="vy"
+          onChange={(value) => {
+            if (value === 0) {
+              clearHeld("base-strafe");
+              return;
+            }
+            setHeld("base-strafe", {
+              kind: "twist",
+              topic,
+              linear: { x: 0, y: value, z: 0 },
+              angular: { x: 0, y: 0, z: 0 },
+            });
+          }}
+        />
+      )}
+    </div>
   );
 }
 
