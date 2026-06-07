@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.4
+
+- Fix: the panel now scrolls when its content is taller than the pane, so the collapsible
+  Hands section and lower controls stay reachable in a short or shared pane.
+
 ## 0.0.3
 
 - Touch-first teleop dashboard. Cartesian arm jog and the base now drive from hand-rolled

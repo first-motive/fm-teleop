@@ -373,6 +373,9 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
   return (
     <div
       style={{
+        height: "100%",
+        overflowY: "auto",
+        boxSizing: "border-box",
         padding: "0.75rem",
         fontFamily: "sans-serif",
         display: "flex",
@@ -734,6 +737,9 @@ export function activate(extensionContext: ExtensionContext): void {
   extensionContext.registerPanel({
     name: "First Motive Teleop",
     initPanel: (context: PanelExtensionContext) => {
+      // Foxglove sizes panelElement to fill the panel tile; make it the scroll
+      // boundary so a tall dashboard scrolls instead of clipping off the bottom.
+      context.panelElement.style.overflowY = "auto";
       const root = createRoot(context.panelElement);
       root.render(<TeleopPanel context={context} />);
       return () => root.unmount();
