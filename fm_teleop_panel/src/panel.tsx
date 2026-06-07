@@ -43,6 +43,16 @@ const ROBOTS: Record<string, RobotConfig> = {
     joints: Array.from({ length: 7 }, (_, i) => `openarm_right_joint${i + 1}`),
     enableCartesian: true,
   },
+  // SO101: Servo drives the 5-joint manipulator group; the gripper is a separate
+  // controller, not jogged here. Cartesian runs through the inverse Jacobian — a
+  // 5-DOF arm cannot span SE(3), so orientation drifts on the unobtainable axis.
+  so101: {
+    label: "SO101",
+    commandFrame: "base_link",
+    joints: ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"],
+    enableCartesian: true,
+    cartesianNote: "5-DOF: translation tracks, orientation drifts",
+  },
 };
 
 const DEFAULT_ROBOT = "openarm";
