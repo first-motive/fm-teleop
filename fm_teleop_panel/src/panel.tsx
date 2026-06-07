@@ -21,7 +21,7 @@ import { ReactElement, useEffect, useLayoutEffect, useRef, useState } from "reac
 import { createRoot } from "react-dom/client";
 
 import { Joystick, ThumbStick } from "./joystick";
-import { Contribution, mergeContributions, toMessage, twistStampedAxis } from "./merge";
+import { Contribution, mergeContributions, toMessage, Vec3 } from "./merge";
 
 const REPEAT_MS = 50;
 
@@ -183,8 +183,6 @@ const ROBOTS: Record<string, RobotConfig> = {
 
 const DEFAULT_ROBOT = "openarm";
 
-type Axis = "linear" | "angular";
-type Field = "x" | "y" | "z";
 type Stamp = { sec: number; nsec: number };
 
 function robotConfig(key: string): RobotConfig {
@@ -328,43 +326,32 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
           <h4 style={{ margin: "0.5rem 0 0.25rem" }}>{arm.label}</h4>
           {arm.enableCartesian && (
             <Section title={`Cartesian (m/s · rad/s, unitless)${arm.cartesianNote ? ` — ${arm.cartesianNote}` : ""}`}>
-              {(["linear", "angular"] as Axis[]).map((axis) =>
-                (["x", "y", "z"] as Field[]).map((field) => {
-                  const id = `${arm.key}-cart-${axis}-${field}`;
-                  return (
-                    <JogButton
-                      key={`${axis}-${field}`}
-                      label={`${axis[0]}${field}`}
-                      onDown={(sign) =>
-                        setHeld(id, twistStampedAxis(arm.servoTopic, arm.commandFrame, axis, field, sign))
-                      }
-                      onUp={() => clearHeld(id)}
-                    />
-                  );
-                }),
-              )}
+              <ArmCartesianSticks arm={arm} setHeld={setHeld} clearHeld={clearHeld} />
             </Section>
           )}
-          <Section title="Per-joint">
-            {arm.joints.map((joint, i) => {
-              const id = `${arm.key}-joint-${joint}`;
-              return (
-                <JogButton
-                  key={joint}
-                  label={`j${i + 1}`}
-                  onDown={(sign) =>
-                    setHeld(id, {
-                      kind: "jointJog",
-                      topic: arm.jointTopic,
-                      frame: arm.commandFrame,
-                      velocities: { [joint]: sign },
-                    })
-                  }
-                  onUp={() => clearHeld(id)}
-                />
-              );
-            })}
-          </Section>
+          <details>
+            <summary style={{ fontSize: "0.8rem", opacity: 0.7, cursor: "pointer" }}>Per-joint</summary>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem", marginTop: "0.25rem" }}>
+              {arm.joints.map((joint, i) => {
+                const id = `${arm.key}-joint-${joint}`;
+                return (
+                  <JogButton
+                    key={joint}
+                    label={`j${i + 1}`}
+                    onDown={(sign) =>
+                      setHeld(id, {
+                        kind: "jointJog",
+                        topic: arm.jointTopic,
+                        frame: arm.commandFrame,
+                        velocities: { [joint]: sign },
+                      })
+                    }
+                    onUp={() => clearHeld(id)}
+                  />
+                );
+              })}
+            </div>
+          </details>
         </div>
       ))}
 
@@ -502,6 +489,94 @@ function BaseJoystick({
           }}
         />
       )}
+    </div>
+  );
+}
+
+// Cartesian arm jog on four sticks, all merged into one TwistStamped on the
+// arm's servo topic (the held Map sums them per tick — full 6-DOF two-handed):
+//   translate pad   lin x (fwd, up) · lin y (lateral, sideways)
+//   Z thumb         lin z (up/down)
+//   rotate pad      ang y (pitch, up/down) · ang z (yaw, sideways)
+//   roll thumb      ang x (roll)
+// Each stick clears its contribution at rest so Servo times the jog out to a hold.
+function ArmCartesianSticks({
+  arm,
+  setHeld,
+  clearHeld,
+}: {
+  arm: ArmGroup;
+  setHeld: (id: string, c: Contribution) => void;
+  clearHeld: (id: string) => void;
+}): ReactElement {
+  const topic = arm.servoTopic;
+  const frame = arm.commandFrame;
+  const write = (id: string, linear: Vec3, angular: Vec3) => {
+    setHeld(id, { kind: "twistStamped", topic, frame, linear, angular });
+  };
+  const translateId = `${arm.key}-translate`;
+  const rotateId = `${arm.key}-rotate`;
+  const zId = `${arm.key}-zlift`;
+  const rollId = `${arm.key}-roll`;
+
+  return (
+    <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+        <Joystick
+          size={STICK_SIZE}
+          deadzone={DEFAULT_DEADZONE}
+          label="translate (x↑ · y↔)"
+          onChange={(v) => {
+            if (v.x === 0 && v.y === 0) {
+              clearHeld(translateId);
+              return;
+            }
+            // Stick up → forward (+x); stick right → robot-right (−y, REP y-left).
+            write(translateId, { x: v.y, y: -v.x, z: 0 }, { x: 0, y: 0, z: 0 });
+          }}
+        />
+        <ThumbStick
+          width={THUMB_WIDTH}
+          height={STICK_SIZE}
+          deadzone={DEFAULT_DEADZONE}
+          label="Z"
+          onChange={(value) => {
+            if (value === 0) {
+              clearHeld(zId);
+              return;
+            }
+            write(zId, { x: 0, y: 0, z: value }, { x: 0, y: 0, z: 0 });
+          }}
+        />
+      </div>
+      <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+        <Joystick
+          size={STICK_SIZE}
+          deadzone={DEFAULT_DEADZONE}
+          label="rotate (pitch↕ · yaw↔)"
+          onChange={(v) => {
+            if (v.x === 0 && v.y === 0) {
+              clearHeld(rotateId);
+              return;
+            }
+            // Stick up → pitch (+ang.y); stick right → yaw-right (−ang.z, REP z-up).
+            write(rotateId, { x: 0, y: 0, z: 0 }, { x: 0, y: v.y, z: -v.x });
+          }}
+        />
+        <ThumbStick
+          width={THUMB_WIDTH}
+          height={STICK_SIZE}
+          deadzone={DEFAULT_DEADZONE}
+          label="roll"
+          onChange={(value) => {
+            if (value === 0) {
+              clearHeld(rollId);
+              return;
+            }
+            write(rollId, { x: 0, y: 0, z: 0 }, { x: value, y: 0, z: 0 });
+          }}
+        />
+      </div>
     </div>
   );
 }
