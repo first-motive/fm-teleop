@@ -182,6 +182,12 @@ const ROBOTS: Record<string, RobotConfig> = {
 
 const DEFAULT_ROBOT = "openarm";
 
+// Vision teleop deadman. The vision_source node captures the neutral wrist pose on the
+// rising edge of this Bool and jogs the arm only while it is true; releasing publishes
+// false, which holds the arm (deadman). Robot-independent, so the panel advertises it
+// for every robot.
+const VISION_ENABLE_TOPIC = "/vision_teleop/enable";
+
 type Stamp = { sec: number; nsec: number };
 
 // Persisted panel state (Foxglove saveState / initialState).
@@ -210,6 +216,9 @@ function advertisedTopics(cfg: RobotConfig): Array<{ topic: string; schema: stri
     out.push({ topic: hand.presetTopic, schema: "std_msgs/msg/String" });
     out.push({ topic: hand.sliderTopic, schema: "std_msgs/msg/Float64MultiArray" });
   }
+  // Vision deadman: advertised for every robot, since the camera source is not
+  // robot-specific. Held while the operator engages hand teleop.
+  out.push({ topic: VISION_ENABLE_TOPIC, schema: "std_msgs/msg/Bool" });
   return out;
 }
 
@@ -351,6 +360,12 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
     context.saveState({ robot, speed: next, deadzone } satisfies PanelState);
   };
 
+  // Vision deadman: held true while engaged. Press captures the neutral wrist pose
+  // (rising edge in vision_source) and starts jogging; release holds the arm.
+  const publishVisionEnable = (enabled: boolean) => {
+    context.publish?.(VISION_ENABLE_TOPIC, { data: enabled });
+  };
+
   const publishPreset = (hand: HandSide, name: string) => {
     context.publish?.(hand.presetTopic, { data: name });
   };
@@ -412,6 +427,24 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
           />
           <span style={{ width: "2.5rem", textAlign: "right" }}>{Math.round(speed * 100)}%</span>
         </label>
+        {/* Hold to engage vision teleop; release (up or leave) holds the arm (deadman). */}
+        <button
+          onPointerDown={() => publishVisionEnable(true)}
+          onPointerUp={() => publishVisionEnable(false)}
+          onPointerLeave={() => publishVisionEnable(false)}
+          title="Hold to jog the arm with the tracked wrist; release to hold."
+          style={{
+            background: "#2980b9",
+            color: "#fff",
+            border: "none",
+            borderRadius: "0.25rem",
+            padding: "0.5rem 1rem",
+            fontWeight: "bold",
+            cursor: "pointer",
+          }}
+        >
+          Vision (hold)
+        </button>
       </header>
 
       {/* Primary controls: arm Cartesian sticks + base, always on, in a grid that
