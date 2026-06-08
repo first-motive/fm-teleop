@@ -3,12 +3,17 @@
 <package format="3">
   <name>fm_teleop_vision</name>
   <version>0.0.0</version>
-  <description>Teleop source skeleton: vision hand-tracking (camera-tracked hand pose -> arm + hand)</description>
+  <description>Teleop source: vision wrist-tracking (MediaPipe camera pose -> arm twist)</description>
   <maintainer email="nish@ubundi.co.za">First Motive</maintainer>
   <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
   <depend>fm_teleop_core</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <!-- mediapipe has no rosdep key; install it via pip in the runtime image. -->
+  <exec_depend>python3-opencv</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

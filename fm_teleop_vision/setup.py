@@ -10,11 +10,14 @@ setup(
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
     ],
-    install_requires=["setuptools"],
+    # mediapipe + opencv are pip-only (no rosdep key); install them into the runtime
+    # image to run the node. The pure-Python tests (retarget, filter) and the mocked
+    # node smoke test do not import them, so colcon test stays green without them.
+    install_requires=["setuptools", "mediapipe", "opencv-python", "numpy"],
     zip_safe=True,
     maintainer="First Motive",
     maintainer_email="nish@ubundi.co.za",
-    description="Teleop source skeleton: vision hand-tracking",
+    description="Teleop source: vision wrist-tracking (MediaPipe) -> arm twist",
     license="Apache-2.0",
     tests_require=["pytest"],
     entry_points={
