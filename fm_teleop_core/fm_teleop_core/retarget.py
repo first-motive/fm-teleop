@@ -34,3 +34,28 @@ def clamp_vector(values, limits):
 def scale(value, factor):
     """Multiply a reading by a speed scalar, returning a float."""
     return float(value) * float(factor)
+
+
+def displacement_to_twist(position, neutral, factor, threshold, limit):
+    """Map a tracked point's displacement from a neutral origin to a linear velocity.
+
+    The position-control retarget used by the vision source: jog speed is proportional
+    to how far the tracked point (a wrist) is held from the neutral pose captured at
+    engage. Per axis, the displacement ``position - neutral`` is deadzoned (kills
+    rest jitter near neutral), scaled (metres of displacement -> command velocity),
+    and clamped to ``[-limit, limit]`` (bounds the jog). Returns a 3-vector
+    ``[vx, vy, vz]``; the caller fills a Twist's linear part and leaves angular zero.
+
+    ``position`` and ``neutral`` are 3-vectors in the same frame. Raises ValueError
+    if either is not length 3.
+    """
+    position = list(position)
+    neutral = list(neutral)
+    if len(position) != 3 or len(neutral) != 3:
+        raise ValueError(
+            f"position and neutral must be 3-vectors, got {len(position)} and {len(neutral)}."
+        )
+    return [
+        clamp(scale(deadzone(p - n, threshold), factor), -limit, limit)
+        for p, n in zip(position, neutral)
+    ]
