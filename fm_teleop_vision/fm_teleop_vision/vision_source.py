@@ -26,6 +26,7 @@ the node smoke test hermetic (no camera, no model) and colcon test green on a ba
 
 from geometry_msgs.msg import TwistStamped
 import rclpy
+from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import Bool
 
 from fm_teleop_core.retarget import displacement_to_twist
@@ -70,6 +71,9 @@ class VisionSource(TeleopSource):
         # Topics.
         self.declare_parameter("twist_topic", "/servo_node/delta_twist_cmds")
         self.declare_parameter("enable_topic", "/vision_teleop/enable")
+        # Annotated debug stream for Foxglove (no OpenCV window in the container).
+        # Empty disables it — the smoke test sets it empty to stay headless.
+        self.declare_parameter("debug_image_topic", "/vision_teleop/debug/compressed")
 
         self._frame = self.get_parameter("command_frame").value
         self._scale = self.get_parameter("scale").value
@@ -103,6 +107,10 @@ class VisionSource(TeleopSource):
 
         self._pub = self.contract_publisher(
             "arm_twist", topic=self.get_parameter("twist_topic").value
+        )
+        debug_topic = self.get_parameter("debug_image_topic").value
+        self._debug_pub = (
+            self.create_publisher(CompressedImage, debug_topic, 10) if debug_topic else None
         )
         self.create_subscription(
             Bool, self.get_parameter("enable_topic").value, self._on_enable, 10
@@ -144,6 +152,7 @@ class VisionSource(TeleopSource):
             return
 
         sample = self._tracker.process(frame)
+        self._publish_debug(frame, sample)
         # Lost or low-confidence track: hold while engaged, and drop filter history so a
         # re-acquire does not jump.
         if not sample.detected or sample.visibility < self._min_visibility:
@@ -201,6 +210,40 @@ class VisionSource(TeleopSource):
         """
         x, y, z = xyz
         return [z, -x, -y]
+
+    def _publish_debug(self, frame, sample):
+        """Publish an annotated JPEG so the operator sees tracking + engage state.
+
+        Marks the tracked wrist and prints the engage state, so Foxglove shows whether
+        the camera has the wrist and whether the deadman is held — the two things an
+        operator needs before trusting the jog. No-op when debug is disabled.
+        """
+        if self._debug_pub is None:
+            return
+        import cv2
+
+        annotated = frame.copy()
+        if sample.detected:
+            colour = (0, 255, 0) if sample.visibility >= self._min_visibility else (0, 165, 255)
+            cv2.circle(annotated, (int(sample.px), int(sample.py)), 10, colour, 2)
+        else:
+            cv2.putText(
+                annotated, "no wrist", (12, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2,
+            )
+        state = "ENGAGED" if self._enabled else "HOLDING"
+        cv2.putText(
+            annotated, state, (12, annotated.shape[0] - 16),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2,
+        )
+        ok, buf = cv2.imencode(".jpg", annotated)
+        if not ok:
+            return
+        msg = CompressedImage()
+        msg.header = self.stamped_header(self._frame)
+        msg.format = "jpeg"
+        msg.data = buf.tobytes()
+        self._debug_pub.publish(msg)
 
     def _publish_twist(self, linear):
         msg = TwistStamped()
