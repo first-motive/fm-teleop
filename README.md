@@ -49,7 +49,7 @@ under the metapackage would hide them from the build.
 | Hand       | `fm_teleop_device/g1_hand_teleop`  | preset/slider mapper  | consumes hand_preset, hand_sliders        | working  |
 | Leader     | `fm_teleop_leader`                 | physical leader arm   | arm_trajectory (leader bypass)            | skeleton |
 | VR         | `fm_teleop_vr`                     | headset controllers   | arm_twist, base_twist, hand_preset, hand_sliders | skeleton |
-| Vision     | `fm_teleop_vision`                 | camera hand-tracking  | arm_twist, hand_preset, hand_sliders      | skeleton |
+| Vision     | `fm_teleop_vision/vision_source`   | camera wrist-tracking | arm_twist                                 | working  |
 
 The panel is the scalable spine: a new operator opens a URL, no hardware shipped. After it,
 vision is the most scalable physical source (just a webcam).
