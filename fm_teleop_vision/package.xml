@@ -9,6 +9,7 @@
 
   <depend>rclpy</depend>
   <depend>fm_teleop_core</depend>
+  <depend>rcl_interfaces</depend>
   <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>

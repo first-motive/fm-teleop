@@ -13,11 +13,12 @@ Engagement is a deadman on ``/vision_teleop/enable`` (std_msgs/Bool, from the pa
 rising edge captures the current wrist as neutral, and the arm jogs only while it stays
 true. Releasing it publishes one zero twist so Servo holds immediately.
 
-Trust + safety: ``camera_source``, ``model_path``, ``scale``, and ``clamp`` are operator
-launch params, read once at construction (runtime ``ros2 param set`` cannot mutate them
-after). ``scale`` and ``clamp`` are the teleop speed knobs; the published twist is the
-*requested* jog, and MoveIt Servo enforces the final joint-velocity, singularity, and
-collision limits downstream — it is the safety backstop, not this node.
+Trust + safety: ``camera_source``, ``model_path``, and ``rate_hz`` are read once at
+construction. The jog knobs (``scale``, ``deadzone``, ``clamp``, ``min_visibility``, and
+the ``use_x/use_y/use_z`` axis toggles) are operator params tunable live via ``ros2 param
+set`` so the jog can be tuned without a relaunch. The published twist is the *requested*
+jog, and MoveIt Servo enforces the final joint-velocity, singularity, and collision limits
+downstream — it is the safety backstop, not this node.
 
 OpenCV and MediaPipe are imported lazily by the default capture/tracker factories, so the
 module imports — and the node constructs with injected fakes — without them. That keeps
@@ -25,6 +26,7 @@ the node smoke test hermetic (no camera, no model) and colcon test green on a ba
 """
 
 from geometry_msgs.msg import TwistStamped
+from rcl_interfaces.msg import SetParametersResult
 import rclpy
 from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import Bool
@@ -117,10 +119,29 @@ class VisionSource(TeleopSource):
         )
         period = 1.0 / float(self.get_parameter("rate_hz").value)
         self.create_timer(period, self._on_tick)
+        # Live-tune the jog knobs without a relaunch: `ros2 param set /vision_source
+        # scale 25.0`. rate_hz is omitted — the timer period is fixed at creation.
+        self.add_on_set_parameters_callback(self._on_set_params)
         self.get_logger().info(
             f"vision_source up: wrist={self.get_parameter('wrist_side').value}, "
             f"frame={self._frame}, deadman={self.get_parameter('enable_topic').value}"
         )
+
+    def _on_set_params(self, params):
+        """Apply live changes to the jog knobs (scale, deadzone, clamp, visibility, axes)."""
+        axis_index = {"use_x": 0, "use_y": 1, "use_z": 2}
+        for p in params:
+            if p.name == "scale":
+                self._scale = p.value
+            elif p.name == "deadzone":
+                self._deadzone = p.value
+            elif p.name == "clamp":
+                self._clamp = p.value
+            elif p.name == "min_visibility":
+                self._min_visibility = p.value
+            elif p.name in axis_index:
+                self._use_axes[axis_index[p.name]] = p.value
+        return SetParametersResult(successful=True)
 
     def _build_tracker(self):
         """Default tracker factory — lazily imports MediaPipe (real camera path)."""

@@ -192,3 +192,22 @@ def test_debug_disabled_is_noop(ros):
         assert "cv2" not in sys.modules
     finally:
         node.destroy_node()
+
+
+def test_live_param_set_updates_jog_knobs(ros):
+    # The jog knobs are tunable at runtime via ros2 param set (the callback path).
+    from rclpy.parameter import Parameter
+
+    node = _make_node(FakeTracker())
+    try:
+        result = node._on_set_params([
+            Parameter("scale", Parameter.Type.DOUBLE, 99.0),
+            Parameter("deadzone", Parameter.Type.DOUBLE, 0.0),
+            Parameter("use_z", Parameter.Type.BOOL, False),
+        ])
+        assert result.successful
+        assert node._scale == 99.0
+        assert node._deadzone == 0.0
+        assert node._use_axes[2] is False
+    finally:
+        node.destroy_node()
