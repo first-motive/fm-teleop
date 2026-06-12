@@ -7,6 +7,7 @@ cv2. This is the deterministic half of the test plan; the live camera run stays 
 """
 
 import sys
+import time
 import types
 
 from geometry_msgs.msg import Vector3
@@ -16,11 +17,36 @@ from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import Bool
 
 from fm_teleop_vision.pose import WristSample
-from fm_teleop_vision.vision_source import VisionSource
+from fm_teleop_vision.vision_source import _LatestFrameCapture, VisionSource
 
 
 def _zero_linear():
     return Vector3(x=0.0, y=0.0, z=0.0)
+
+
+def test_latest_frame_capture_drains_to_newest():
+    # The grabber thread keeps the newest frame, so read() advances past stale ones.
+    class SeqCap:
+        def __init__(self):
+            self.i = 0
+
+        def read(self):
+            self.i += 1
+            return True, self.i
+
+        def release(self):
+            pass
+
+    cap = _LatestFrameCapture(SeqCap())
+    try:
+        time.sleep(0.05)  # let the grabber thread spin up
+        ok, first = cap.read()
+        assert ok and first is not None
+        time.sleep(0.02)
+        _, second = cap.read()
+        assert second >= first  # draining forward, not stuck on an old frame
+    finally:
+        cap.release()
 
 
 class FakeCapture:

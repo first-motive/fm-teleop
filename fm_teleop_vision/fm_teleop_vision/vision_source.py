@@ -25,6 +25,9 @@ module imports — and the node constructs with injected fakes — without them.
 the node smoke test hermetic (no camera, no model) and colcon test green on a base image.
 """
 
+import threading
+import time
+
 from geometry_msgs.msg import TwistStamped
 from rcl_interfaces.msg import SetParametersResult
 import rclpy
@@ -36,12 +39,61 @@ from fm_teleop_core.source import TeleopSource
 from fm_teleop_vision.filters import Vec3OneEuro
 
 
+class _LatestFrameCapture:
+    """Wrap a VideoCapture in a grabber thread that keeps only the newest frame.
+
+    A buffered MJPEG/RTSP stream backs up when the node reads one frame per tick while
+    the stream delivers more: the surplus queues in OpenCV's FFMPEG buffer and the tick
+    keeps pulling older frames, so latency grows to seconds. The thread drains the stream
+    continuously and hands ``read()`` the most recent frame, keeping the teleop loop on
+    live video regardless of the tick rate.
+
+    The grabber thread is the sole owner of the wrapped capture: it releases the cap on
+    exit, and ``release()`` never touches it. A blocking ``cap.read()`` (a stalled stream)
+    would otherwise race a caller-side release, and OpenCV's VideoCapture is not reentrant.
+    The thread is a daemon, so it exits with the process even if a blocked read outlives
+    the join.
+    """
+
+    def __init__(self, cap):
+        self._cap = cap
+        self._lock = threading.Lock()
+        self._frame = None
+        self._ok = False
+        self._stop = False
+        self._thread = threading.Thread(target=self._drain, daemon=True)
+        self._thread.start()
+
+    def _drain(self):
+        try:
+            while not self._stop:
+                ok, frame = self._cap.read()
+                with self._lock:
+                    self._ok, self._frame = ok, frame
+                if not ok:
+                    time.sleep(0.01)  # stream hiccup — back off before retrying
+        finally:
+            self._cap.release()  # only this thread touches the cap — no release race
+
+    def read(self):
+        with self._lock:
+            if self._frame is None:
+                return False, None
+            return self._ok, self._frame
+
+    def release(self):
+        # Signal the grabber to stop; it releases the cap on exit. Do not release the cap
+        # here — that would race a blocked read in the grabber thread.
+        self._stop = True
+        self._thread.join(timeout=1.0)
+
+
 def _default_capture(source):
-    """Open an OpenCV capture from a webcam index (``"0"``) or a stream URL."""
+    """Open a webcam index (``"0"``) or stream URL, drained to the latest frame."""
     import cv2
 
     spec = int(source) if str(source).isdigit() else source
-    return cv2.VideoCapture(spec)
+    return _LatestFrameCapture(cv2.VideoCapture(spec))
 
 
 class VisionSource(TeleopSource):
