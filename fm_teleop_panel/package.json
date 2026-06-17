@@ -5,7 +5,7 @@
   "publisher": "first-motive",
   "version": "0.0.4",
   "license": "Apache-2.0",
-  "homepage": "https://github.com/Ubundi/fm-ros2/tree/main/fm_teleop/fm_teleop_panel",
+  "homepage": "https://github.com/first-motive/fm-ros2/tree/main/fm_teleop/fm_teleop_panel",
   "main": "./dist/extension.js",
   "keywords": [
     "foxglove",
