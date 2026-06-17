@@ -28,11 +28,11 @@ ros2 run fm_teleop_device g1_hand_teleop
 In practice these launch through `fm_bringup/teleop.launch.py` (`scripts/teleop.sh
 --input joy|spacenav`); the G1-D hand node is registry-driven per robot.
 
-## Device availability
+## Device Availability
 
 The gamepad reads `/joy` (Linux `/dev/input`, or a Mac host-side HID->Joy bridge); the
 SpaceMouse is USB, so Linux-only — no OrbStack/Docker passthrough on the Mac.
 
-## Build type
+## Build Type
 
 `ament_python`.

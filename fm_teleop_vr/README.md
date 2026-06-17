@@ -4,7 +4,7 @@ Teleop source skeleton: **VR controllers**. A headset-tracked 6-DOF controller j
 arm in Cartesian space and drives the base. Buildable and importable today; the node body
 is one session of work away.
 
-## Planned mapping
+## Planned Mapping
 
 ```
 controller pose delta  ->  arm_twist (TwistStamped)   ->  MoveIt Servo
@@ -22,6 +22,6 @@ Skeleton. `VrSource.__init__` raises `NotImplementedError`; running
 the VR bridge's pose/button stream, difference pose into a twist (deadzone + speed scalar
 via `fm_teleop_core.retarget`), and publish via `self.contract_publisher(...)`.
 
-## Build type
+## Build Type
 
 `ament_python`.

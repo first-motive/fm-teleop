@@ -54,7 +54,7 @@ under the metapackage would hide them from the build.
 The panel is the scalable spine: a new operator opens a URL, no hardware shipped. After it,
 vision is the most scalable physical source (just a webcam).
 
-### Future sources (no package yet)
+### Future Sources (No Package Yet)
 
 Documented here so the intent is on record; each gets a package when a session implements it
 (no empty packages until then): **keyboard** (debug nudges), **phone AR** (ARKit/ARCore pose),

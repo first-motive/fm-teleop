@@ -4,7 +4,7 @@ Teleop source skeleton: **leader-arm follow**. A physical leader arm whose joint
 drive the follower directly. Buildable and importable today; the node body is one session
 of work away.
 
-## Planned mapping
+## Planned Mapping
 
 ```
 leader /joint_states  ->  arm_trajectory (JointTrajectory)  ->  follower arm controller
@@ -22,6 +22,6 @@ subscribe to the leader's `sensor_msgs/JointState`, map each sample to a single-
 `JointTrajectory`, and publish via `self.contract_publisher("arm_trajectory",
 topic=<follower controller>)`.
 
-## Build type
+## Build Type
 
 `ament_python`.

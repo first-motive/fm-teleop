@@ -4,7 +4,7 @@ The contract every teleop source collapses to, plus the base node that encodes i
 This package holds no source of its own — it is what makes a new source one file of
 mapping logic.
 
-## The contract
+## The Contract
 
 Many input modalities, one robot fleet. Whatever the device, a source publishes one of
 a small fixed set of standard-interface channels; the sinks in `fm_control` consume them.
@@ -39,7 +39,7 @@ source.py     TeleopSource(Node): contract_publisher() + stamped_header()
 retarget.py   pure device-to-command math (deadzone, clamp, clamp_vector, scale)
 ```
 
-## Writing a source
+## Writing a Source
 
 ```python
 from fm_teleop_core import retarget
@@ -61,6 +61,6 @@ class MySource(TeleopSource):
 
 The subclass never names a topic or message type — both come from the contract.
 
-## Build type
+## Build Type
 
 `ament_python`.
