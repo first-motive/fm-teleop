@@ -5,8 +5,7 @@ Guidance for Claude Code and Codex working in the `fm-teleop` repo. See the
 
 ## Purpose
 
-First Motive teleop layer: every teleop input (device, leader, VR, vision) behind one command contract. Part of First Motive's ROS2 (Humble) stack — one of seven package
-repos assembled by [`fm-ros2`](https://github.com/first-motive/fm-ros2).
+First Motive teleop layer: every teleop input (device, leader, VR, vision) behind one command contract. Part of First Motive's ROS2 (Humble) stack — one of the public package repos assembled by [`fm-ros2`](https://github.com/first-motive/fm-ros2).
 
 ## Conventions
 
