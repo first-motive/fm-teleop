@@ -1,6 +1,6 @@
 # fm-teleop
 
-[![License: Proprietary](https://img.shields.io/badge/License-Proprietary-blue.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 Teleop layer for First Motive's ROS2 stack. Groups every teleop input — device,
 leader arm, VR, and vision — behind one command contract, plus the Foxglove
