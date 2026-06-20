@@ -1,0 +1,43 @@
+# The teleop contract — every input source normalizes onto fixed channels, and
+# the sinks in the control stack consume those channels. Sources never hard-code
+# topics; they publish through fm_teleop_core's contract. Swap an input device
+# without touching anything downstream. Sources + sinks are plum nodes; the
+# contract channels are cream topic pills. Leader and VR are stubs (dashed).
+...@styles
+direction: right
+
+joy: joy_to_servo { class: node }
+spacenav: spacenav_to_servo { class: node }
+vision: vision_source { class: node }
+panel: "Foxglove panel" { class: node }
+leader: "leader_source (stub)" { class: node; style.stroke-dash: 4 }
+vr: "vr_source (stub)" { class: node; style.stroke-dash: 4 }
+hand: g1_hand_teleop { class: node }
+
+arm_twist: /servo_node/delta_twist_cmds { class: topic }
+arm_joint: /servo_node/delta_joint_cmds { class: topic }
+base_twist: /cmd_vel { class: topic }
+hand_ch: "hand preset · sliders" { class: topic }
+arm_traj: arm_trajectory { class: topic }
+
+servo: moveit_servo { class: node }
+base: base controller { class: node }
+hand_ctrl: hand controller { class: node }
+arm_ctrl: arm controller { class: node }
+
+joy -> arm_twist
+spacenav -> arm_twist
+vision -> arm_twist
+panel -> arm_twist
+panel -> arm_joint
+panel -> base_twist
+panel -> hand_ch
+hand_ch -> hand
+hand -> hand_ctrl
+leader -> arm_traj
+vr -> arm_twist
+
+arm_twist -> servo
+arm_joint -> servo
+base_twist -> base
+arm_traj -> arm_ctrl: leader bypass

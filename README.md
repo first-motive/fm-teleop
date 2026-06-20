@@ -37,6 +37,17 @@ colcon test && colcon test-result --verbose
 The Foxglove panel (`fm_teleop_panel`) builds with npm, not colcon — see its own
 README.
 
+## Architecture
+
+Every input source normalizes onto one fixed command contract; the sinks in the
+control stack subscribe the fixed channels. Swap an input device without touching
+anything downstream.
+
+![contract](docs/diagrams/contract.svg)
+
+Full channel table, source list, and the vision pipeline:
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ## Governance
 
 Owner-free-on-main — see [CONTRIBUTING.md](CONTRIBUTING.md) and
