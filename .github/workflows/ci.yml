@@ -94,10 +94,13 @@ jobs:
       - name: Install tooling + ROS deps
         run: |
           # No git externals to import — fm-teleop.repos pulls only docker/, which
-          # the native path does not use. Just resolve the package deps via rosdep.
+          # the native path does not use. Resolve the package deps via rosdep.
+          # apt-get update first: the base image ships no package lists, so
+          # rosdep's `apt-get install` (e.g. ros-humble-control-msgs) would 404.
           source /opt/ros/humble/setup.bash
+          apt-get update
           rosdep update
-          rosdep install --from-paths . --ignore-src -y -r || true
+          rosdep install --from-paths . --ignore-src -y -r
 
       - name: Build workspace
         run: |
