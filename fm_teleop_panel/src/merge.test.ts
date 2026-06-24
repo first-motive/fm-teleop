@@ -121,6 +121,31 @@ describe("scaleContribution", () => {
     if (src.kind !== "twistStamped") throw new Error("expected twistStamped");
     expect(src.linear.x).toBe(1);
   });
+
+  it("clamps merged twist components to the Servo unit range", () => {
+    const scaled = scaleContribution(
+      {
+        kind: "twistStamped",
+        topic: ARM,
+        frame: FRAME,
+        linear: { x: 1.7, y: -1.4, z: 0.2 },
+        angular: { x: 0, y: 0, z: -1.8 },
+      },
+      1,
+    );
+    if (scaled.kind !== "twistStamped") throw new Error("expected twistStamped");
+    expect(scaled.linear).toEqual({ x: 1, y: -1, z: 0.2 });
+    expect(scaled.angular.z).toBe(-1);
+  });
+
+  it("clamps jointJog velocities to the Servo unit range", () => {
+    const scaled = scaleContribution(
+      { kind: "jointJog", topic: "/jog", frame: FRAME, velocities: { j1: 1.2, j2: -2.5 } },
+      1,
+    );
+    if (scaled.kind !== "jointJog") throw new Error("expected jointJog");
+    expect(scaled.velocities).toEqual({ j1: 1, j2: -1 });
+  });
 });
 
 describe("toMessage", () => {

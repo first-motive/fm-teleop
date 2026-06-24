@@ -55,7 +55,7 @@ ros2 launch fm_bringup teleop.launch.py input:=vision camera_source:=0
 
 `camera_source` is a webcam index (`0`, the host webcam) or a stream URL.
 
-### Camera: USB vs Stream
+### Camera: USB vs stream
 
 OrbStack on macOS cannot pass a USB webcam into the container, so the webcam index
 (`camera_source:=0`) works **only when the node runs on the host**. The portable path is
@@ -68,7 +68,7 @@ camera_source:=http://<phone-ip>:8080/video
 Watch the annotated `/vision_teleop/debug/compressed` stream in Foxglove to confirm the
 camera has the wrist (green marker) and whether the deadman is held (`ENGAGED` / `held`).
 
-## Z-Axis Caveat
+## Z-axis caveat
 
 MediaPipe's depth (Z) estimate is markedly noisier than X/Y — it is the suspect axis. The
 One-Euro filter tames it, but if the forward/back jog feels unstable, drop it without
@@ -99,7 +99,7 @@ ros2 run fm_teleop_vision vision_source --ros-args -p use_z:=false
 | `enable_topic`       | `/vision_teleop/enable`              | Deadman input.                                     |
 | `debug_image_topic`  | `/vision_teleop/debug/compressed`    | Annotated JPEG; empty disables it.                 |
 
-## Frame Mapping
+## Frame mapping
 
 MediaPipe world axes are image-style (+x right, +y down, +z toward the camera); the
 command frame is REP-103 (+x forward, +y left, +z up). The mapping lives in one small,
@@ -114,7 +114,7 @@ up      (+z) ← −y   (hand up → arm up)
 These three signs are the first thing to flip if the arm jogs the wrong way during
 bringup — expect to tune them once against the live sim.
 
-## Build Type
+## Build type
 
 `ament_python`. MediaPipe and OpenCV are pip-only (no rosdep key), so the node needs
 `mediapipe` + `opencv-python` in the runtime image; the tests do not (the retarget and

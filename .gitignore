@@ -20,3 +20,4 @@ MUJOCO_LOG.TXT
 .idea/
 *.swp
 .DS_Store
+config.bat
