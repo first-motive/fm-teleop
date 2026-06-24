@@ -1,4 +1,10 @@
 # vcs import < fm-teleop.repos   (run from the workspace root)
 #
-# No git externals — Python/npm deps resolve via rosdep + npm.
-repositories: {}
+# No git externals — Python/npm deps resolve via rosdep + npm. The only entry is
+# the shared fm-docker compose overlays (imported into docker/ so run.sh's
+# container path can `docker compose -f docker/compose.yaml ...`).
+repositories:
+  docker:
+    type: git
+    url: https://github.com/first-motive/fm-docker.git
+    version: main
