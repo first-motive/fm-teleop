@@ -51,10 +51,14 @@ LAUNCH+=(${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"})
 if [[ "$MODE" == native ]]; then
   # Host path: build in place, launch on the host. No git externals to import —
   # Python/npm deps resolve via rosdep + npm (fm-teleop.repos pulls only docker/).
+  set +u  # ROS setup scripts reference unbound vars; nounset would abort the source
   source "/opt/ros/${ROS_DISTRO:-humble}/setup.bash"
+  set -u
   rosdep install --from-paths . --ignore-src -y -r 2>/dev/null || true
   colcon build --symlink-install
+  set +u
   source install/setup.bash
+  set -u
   echo ">> launching joy_to_servo on the host — publishes Servo twist from /joy"
   exec "${LAUNCH[@]}"
 fi
