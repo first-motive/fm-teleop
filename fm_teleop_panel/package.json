@@ -3,9 +3,9 @@
   "displayName": "First Motive Teleop",
   "description": "Jog a registered robot through MoveIt Servo: publishes TwistStamped and JointJog from the browser, with the joint set and frame chosen per robot in the panel settings.",
   "publisher": "first-motive",
-  "version": "0.0.4",
+  "version": "0.0.6",
   "license": "Apache-2.0",
-  "homepage": "https://github.com/first-motive/fm-ros2/tree/main/fm_teleop/fm_teleop_panel",
+  "homepage": "https://github.com/first-motive/fm-teleop/tree/main/fm_teleop_panel",
   "main": "./dist/extension.js",
   "keywords": [
     "foxglove",

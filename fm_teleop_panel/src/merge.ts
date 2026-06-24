@@ -26,6 +26,18 @@ function addVec(a: Vec3, b: Vec3): Vec3 {
   return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
 }
 
+function clampUnit(value: number): number {
+  return Math.max(-1, Math.min(1, value));
+}
+
+function clampVec(vec: Vec3): Vec3 {
+  return {
+    x: clampUnit(vec.x),
+    y: clampUnit(vec.y),
+    z: clampUnit(vec.z),
+  };
+}
+
 // Combine all active contributions into one merged contribution per topic.
 // Iteration order is the caller's; merge is commutative, so order is irrelevant.
 export function mergeContributions(contribs: Iterable<Contribution>): Contribution[] {
@@ -73,14 +85,22 @@ export function scaleContribution(c: Contribution, factor: number): Contribution
   switch (c.kind) {
     case "twistStamped":
     case "twist": {
-      const linear = { x: c.linear.x * factor, y: c.linear.y * factor, z: c.linear.z * factor };
-      const angular = { x: c.angular.x * factor, y: c.angular.y * factor, z: c.angular.z * factor };
+      const linear = clampVec({
+        x: c.linear.x * factor,
+        y: c.linear.y * factor,
+        z: c.linear.z * factor,
+      });
+      const angular = clampVec({
+        x: c.angular.x * factor,
+        y: c.angular.y * factor,
+        z: c.angular.z * factor,
+      });
       return { ...c, linear, angular };
     }
     case "jointJog": {
       const velocities: Record<string, number> = {};
       for (const [joint, v] of Object.entries(c.velocities)) {
-        velocities[joint] = v * factor;
+        velocities[joint] = clampUnit(v * factor);
       }
       return { ...c, velocities };
     }
