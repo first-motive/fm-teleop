@@ -99,12 +99,17 @@ jobs:
           rosdep update
           rosdep install --from-paths . --ignore-src -y -r || true
 
+      - name: Build workspace
+        run: |
+          source /opt/ros/humble/setup.bash
+          colcon build --symlink-install
+
       - name: Launch headless, bounded
         run: |
-          # run.sh native builds in place, then `ros2 run`s joy_to_servo — it spins
-          # waiting on /joy, so bound it as a smoke check. timeout SIGTERM (143) /
-          # timeout-reached (124) both mean it came up; anything else is a fail.
+          # Workspace pre-built above, so run.sh's incremental build is quick. It
+          # then `ros2 run`s joy_to_servo, which spins waiting on /joy, so the bounded
+          # window covers it. 124 = ran the full window (came up); 0 = clean exit.
           set +e
-          timeout --preserve-status 90 ./run.sh --native
+          timeout 90 ./run.sh --native
           code=$?
-          [ "$code" -eq 124 ] || [ "$code" -eq 143 ] || [ "$code" -eq 0 ]
+          [ "$code" -eq 124 ] || [ "$code" -eq 0 ] || [ "$code" -eq 143 ]
