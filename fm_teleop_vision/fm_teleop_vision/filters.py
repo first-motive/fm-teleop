@@ -12,6 +12,7 @@ unit-tested on the host without a ROS graph, a camera, or the pose model.
 """
 
 import math
+from dataclasses import replace
 
 
 class LowPassFilter:
@@ -91,3 +92,44 @@ class Vec3OneEuro:
         """Reset all three axes (call when tracking drops, to avoid a resume jump)."""
         for f in self._filters:
             f.reset()
+
+
+class SkeletonFilter:
+    """One ``OneEuroFilter`` per (landmark_idx, axis) over world coordinates.
+
+    Used by ``hand_tracker`` to smooth the metric ``hand_world_landmarks`` (orientation +
+    curl) before they become a robot command, so jitter never reaches the arm. Serves any
+    frame whose ``.detected`` is bool and whose ``.landmarks``/``.joints`` carry wx/wy/wz.
+    """
+
+    def __init__(self, min_cutoff=1.0, beta=0.02, d_cutoff=1.0):
+        self._params = dict(min_cutoff=min_cutoff, beta=beta, d_cutoff=d_cutoff)
+        self._filters = {}
+
+    def _f(self, key):
+        f = self._filters.get(key)
+        if f is None:
+            f = OneEuroFilter(**self._params)
+            self._filters[key] = f
+        return f
+
+    def apply(self, pose_frame, dt):
+        """Return a same-shape frame with wx/wy/wz filtered.
+
+        On non-detected frames the input is returned unchanged and the filters are NOT
+        advanced, so tracking resumes without a jump.
+        """
+        if not pose_frame.detected:
+            return pose_frame
+        attr = "landmarks" if hasattr(pose_frame, "landmarks") else "joints"
+        items = getattr(pose_frame, attr)
+        new_items = []
+        for j in items:
+            wx = self._f((j.idx, "x"))(j.wx, dt)
+            wy = self._f((j.idx, "y"))(j.wy, dt)
+            wz = self._f((j.idx, "z"))(j.wz, dt)
+            new_items.append(replace(j, wx=wx, wy=wy, wz=wz))
+        return replace(pose_frame, **{attr: new_items})
+
+    def reset(self):
+        self._filters.clear()
