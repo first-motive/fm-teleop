@@ -20,7 +20,7 @@ package (``fm_teleop_msgs``) exists by design — the contract is standard messa
 from dataclasses import dataclass
 
 from control_msgs.msg import JointJog
-from geometry_msgs.msg import Twist, TwistStamped
+from geometry_msgs.msg import PoseStamped, Twist, TwistStamped
 from std_msgs.msg import Float64MultiArray, String
 from trajectory_msgs.msg import JointTrajectory
 
@@ -53,6 +53,16 @@ ARM_JOINT = Channel(
     msg_type=JointJog,  # control_msgs/JointJog
     topic="/servo_node/delta_joint_cmds",
     summary="Per-joint arm jog -> MoveIt Servo",
+)
+# Absolute end-effector pose target -> MoveIt Servo PoseTracking. Unlike ARM_TWIST (a
+# velocity jog that drifts on a steady bias), this is an absolute pose the EE servos to
+# and HOLDS — the vision mirror source uses it for indexed 1:1 hand mirroring. One
+# controller has one writer, so a source emits ARM_TWIST or ARM_POSE_TARGET, never both.
+ARM_POSE_TARGET = Channel(
+    key="arm_pose_target",
+    msg_type=PoseStamped,
+    topic="/target_pose",
+    summary="Absolute EE pose target -> MoveIt Servo PoseTracking",
 )
 # Mobile-base velocity; diff_drive / holonomic controllers remap onto this.
 BASE_TWIST = Channel(
@@ -87,6 +97,7 @@ CHANNELS = {
     for channel in (
         ARM_TWIST,
         ARM_JOINT,
+        ARM_POSE_TARGET,
         BASE_TWIST,
         HAND_PRESET,
         HAND_SLIDERS,

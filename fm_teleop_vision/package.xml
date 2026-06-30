@@ -13,6 +13,9 @@
   <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
+  <!-- mirror_source reads the live EE pose from tf2 to anchor the 1:1 mirror. -->
+  <depend>tf2_ros</depend>
+  <depend>ament_index_python</depend>
   <!-- mediapipe has no rosdep key; install it via pip in the runtime image. -->
   <exec_depend>python3-opencv</exec_depend>
 
