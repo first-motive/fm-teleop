@@ -1,7 +1,7 @@
 """The command contract carries every channel from the convergence map."""
 
 from control_msgs.msg import JointJog
-from geometry_msgs.msg import Twist, TwistStamped
+from geometry_msgs.msg import PoseStamped, Twist, TwistStamped
 import pytest
 from std_msgs.msg import Float64MultiArray, String
 from trajectory_msgs.msg import JointTrajectory
@@ -13,6 +13,7 @@ from fm_teleop_core import contract
 EXPECTED = [
     ("arm_twist", TwistStamped, "/servo_node/delta_twist_cmds"),
     ("arm_joint", JointJog, "/servo_node/delta_joint_cmds"),
+    ("arm_pose_target", PoseStamped, "/target_pose"),
     ("base_twist", Twist, "/cmd_vel"),
     ("hand_preset", String, ""),
     ("hand_sliders", Float64MultiArray, ""),
