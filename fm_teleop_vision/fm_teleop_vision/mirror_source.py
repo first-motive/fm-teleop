@@ -42,7 +42,7 @@ from rcl_interfaces.msg import SetParametersResult
 import rclpy
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
-from std_msgs.msg import Bool, Float64, String
+from std_msgs.msg import Bool, Float64, Float64MultiArray, MultiArrayDimension, String
 import tf2_ros
 
 from fm_teleop_core import retarget  # noqa: F401  (kept on the path; mapping reuses it)
@@ -100,6 +100,17 @@ class MirrorSource(TeleopSource):
         # arg keeps working; wiring an orientation source is future work.
         self.declare_parameter("enable_angular", False)
 
+        # --- diagnostics ---
+        # Publish the full internal mapping state each commanding tick (latched hand_ref /
+        # ee_ref, W_m, per-axis scale, the mapped offset, the PRE-clamp target and the
+        # workspace overflow) on debug_topic as a Float64MultiArray (layout label
+        # "mirror_debug_v1"; field order documented in scripts/mirror_datalogger.py). These
+        # are the quantities the two published poses (hand_pose, target_pose) cannot reveal:
+        # what was latched at engage and how much motion the workspace box silently ate.
+        # Off by default (opt-in), live-settable, ~1 tiny msg/tick when on — costs nothing off.
+        self.declare_parameter("publish_debug", False)
+        self.declare_parameter("debug_topic", "/vision/mirror_debug")
+
         # --- gripper (optional; needs a consumer e.g. gripper_teleop on SO-101) ---
         self.declare_parameter("enable_grip", True)
         self.declare_parameter("gripper_preset_topic", "/gripper_teleop/right/preset")
@@ -138,6 +149,13 @@ class MirrorSource(TeleopSource):
         self._grip_pub = (
             self.contract_publisher("hand_preset", topic=gp("gripper_preset_topic").value)
             if self._enable_grip else None
+        )
+
+        # Diagnostic mirror-state publisher. Always created so publish_debug can be toggled
+        # live (a publisher can't be added at runtime); the publish is gated on the flag.
+        self._publish_debug = bool(gp("publish_debug").value)
+        self._debug_pub = self.create_publisher(
+            Float64MultiArray, gp("debug_topic").value, 10
         )
 
         # --- tf2: read the live EE pose (command_frame -> ee_frame) to anchor the mirror ---
@@ -202,6 +220,8 @@ class MirrorSource(TeleopSource):
                 self._grace = float(p.value)
             elif n == "command_timeout":
                 self._timeout = float(p.value)
+            elif n == "publish_debug":
+                self._publish_debug = bool(p.value)
         return SetParametersResult(successful=True)
 
     # --- subscriptions ---
@@ -258,6 +278,36 @@ class MirrorSource(TeleopSource):
         msg.pose.orientation.z = qz
         self._target_pub.publish(msg)
 
+    def _publish_debug_msg(self, w_m, hand_ref, ee_ref, scale, moved, preclamp,
+                           target, overflow):
+        """Emit the full internal mapping state (see the class-level diagnostics note).
+
+        Field order matches MIRROR_DEBUG_FIELDS in scripts/mirror_datalogger.py. W_m is the
+        latched image-width-in-metres; -1.0 is the sentinel for a degenerate hand size at
+        engage (fallback_scale used instead — a positive real W_m is never negative).
+        """
+        if not self._publish_debug:
+            return
+        arr = [
+            1.0,                                            # commanding
+            float(w_m) if w_m is not None else -1.0,        # w_m (-1 = fallback)
+            hand_ref[0], hand_ref[1], hand_ref[2],
+            ee_ref[0], ee_ref[1], ee_ref[2],
+            scale[0], scale[1], scale[2],
+            moved[0], moved[1], moved[2],
+            preclamp[0], preclamp[1], preclamp[2],
+            target[0], target[1], target[2],
+            overflow[0], overflow[1], overflow[2],
+        ]
+        msg = Float64MultiArray()
+        dim = MultiArrayDimension()
+        dim.label = "mirror_debug_v1"
+        dim.size = len(arr)
+        dim.stride = len(arr)
+        msg.layout.dim.append(dim)
+        msg.data = [float(v) for v in arr]
+        self._debug_pub.publish(msg)
+
     # --- fixed-rate command loop ---
     def _tick(self):
         now = self.get_clock().now()
@@ -303,6 +353,15 @@ class MirrorSource(TeleopSource):
                     " (z=%.3f) -> %.2f m EE per image width"
                     % (self._ee_ref_pos + (self._w_m, hand_now[2], self._mirror_gain * self._w_m))
                 )
+            if self._publish_debug:
+                scale0 = mapping.metric_scale(
+                    self._w_m, mirror_gain=self._mirror_gain,
+                    axis_gain=self._axis_gain, fallback_scale=self._fallback_scale,
+                )
+                self._publish_debug_msg(
+                    self._w_m, self._hand_ref, self._ee_ref_pos, scale0,
+                    (0.0, 0.0, 0.0), self._ee_ref_pos, self._ee_ref_pos, (0.0, 0.0, 0.0),
+                )
             self._publish_target(self._ee_ref_pos)   # zero-delta target -> hold, no jump
             return
 
@@ -323,6 +382,13 @@ class MirrorSource(TeleopSource):
                     for i in range(3) if abs(overflow[i]) > 1e-9
                 ),
                 throttle_duration_sec=1.0,
+            )
+        if self._publish_debug:
+            preclamp = tuple(target[i] + overflow[i] for i in range(3))  # raw, pre-clamp
+            moved = tuple(preclamp[i] - self._ee_ref_pos[i] for i in range(3))
+            self._publish_debug_msg(
+                self._w_m, self._hand_ref, self._ee_ref_pos, scale,
+                moved, preclamp, target, overflow,
             )
         self._publish_target(target)
 
