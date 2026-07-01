@@ -3,7 +3,7 @@
 <package format="3">
   <name>fm_teleop_vision</name>
   <version>0.0.0</version>
-  <description>Teleop source: vision wrist-tracking (MediaPipe camera pose -> arm twist)</description>
+  <description>Camera teleop sources (MediaPipe): 1:1 hand-pose mirroring (mirror) and wrist velocity-jog (vision)</description>
   <maintainer email="nish@ubundi.co.za">First Motive</maintainer>
   <license>Apache-2.0</license>
 

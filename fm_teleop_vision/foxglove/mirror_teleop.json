@@ -1,0 +1,170 @@
+{
+  "configById": {
+    "3D!arm": {
+      "cameraState": {
+        "perspective": true,
+        "distance": 1.8,
+        "phi": 62,
+        "thetaOffset": 45,
+        "targetOffset": [0, 0, 0.15],
+        "target": [0, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "fovy": 45,
+        "near": 0.01,
+        "far": 5000
+      },
+      "followMode": "follow-pose",
+      "followTf": "openarm_right_base_link",
+      "scene": {
+        "meshUpAxis": "z_up",
+        "enableStats": false,
+        "transforms": { "showLabel": false, "axisScale": 0, "enablePreloading": false }
+      },
+      "transforms": {},
+      "topics": {
+        "/robot_description": { "visible": true },
+        "/target_pose": { "visible": true }
+      },
+      "layers": {},
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose"
+      }
+    },
+    "Image!cam": {
+      "imageMode": {
+        "imageTopic": "/vision/image"
+      },
+      "synchronize": false,
+      "transformMarkers": false
+    },
+    "Publish!recstart": {
+      "topicName": "/capture/record",
+      "datatype": "std_msgs/msg/Bool",
+      "buttonText": "● REC",
+      "buttonTooltip": "Start a capture session (rosbag + synced CSV)",
+      "buttonColor": "#16a34a",
+      "advancedView": true,
+      "value": "{\n  \"data\": true\n}"
+    },
+    "Publish!recstop": {
+      "topicName": "/capture/record",
+      "datatype": "std_msgs/msg/Bool",
+      "buttonText": "■ STOP",
+      "buttonTooltip": "Stop the current capture session and finalize files",
+      "buttonColor": "#dc2626",
+      "advancedView": true,
+      "value": "{\n  \"data\": false\n}"
+    },
+    "RawMessages!status": {
+      "topicPath": "/capture/status.data"
+    },
+    "Plot!hand": {
+      "title": "HAND input (image-width units)",
+      "paths": [
+        { "value": "/vision/hand_pose.pose.position.x", "label": "hand_x (img-x)", "enabled": true, "timestampMethod": "receiveTime" },
+        { "value": "/vision/hand_pose.pose.position.y", "label": "hand_y (img-y)", "enabled": true, "timestampMethod": "receiveTime" },
+        { "value": "/vision/hand_pose.pose.position.z", "label": "hand_z (depth/size)", "enabled": true, "timestampMethod": "receiveTime" }
+      ],
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "followingViewWidth": 30,
+      "sidebarDimension": 240
+    },
+    "Plot!target": {
+      "title": "COMMANDED target /target_pose (m, base frame)",
+      "paths": [
+        { "value": "/target_pose.pose.position.x", "label": "tgt_x (forward)", "enabled": true, "timestampMethod": "receiveTime" },
+        { "value": "/target_pose.pose.position.y", "label": "tgt_y (left/right)", "enabled": true, "timestampMethod": "receiveTime" },
+        { "value": "/target_pose.pose.position.z", "label": "tgt_z (up/down)", "enabled": true, "timestampMethod": "receiveTime" }
+      ],
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "followingViewWidth": 30,
+      "sidebarDimension": 240
+    },
+    "Plot!overflow": {
+      "title": "WORKSPACE overflow — clamped/eaten motion (m)  [mirror_debug]",
+      "paths": [
+        { "value": "/vision/mirror_debug.data[20]", "label": "overflow_x", "enabled": true, "timestampMethod": "receiveTime" },
+        { "value": "/vision/mirror_debug.data[21]", "label": "overflow_y", "enabled": true, "timestampMethod": "receiveTime" },
+        { "value": "/vision/mirror_debug.data[22]", "label": "overflow_z", "enabled": true, "timestampMethod": "receiveTime" }
+      ],
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "followingViewWidth": 30,
+      "sidebarDimension": 240
+    },
+    "Plot!flags": {
+      "title": "engage / tracking / grip / servo-status",
+      "paths": [
+        { "value": "/vision/engage.data", "label": "engage", "enabled": true, "timestampMethod": "receiveTime" },
+        { "value": "/vision/tracking_active.data", "label": "tracking", "enabled": true, "timestampMethod": "receiveTime" },
+        { "value": "/vision/grip.data", "label": "grip", "enabled": true, "timestampMethod": "receiveTime" },
+        { "value": "/pose_tracking_node/status.data", "label": "servo_status", "enabled": true, "timestampMethod": "receiveTime" }
+      ],
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "followingViewWidth": 30,
+      "sidebarDimension": 240
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": { "speed": 1 },
+  "layout": {
+    "direction": "row",
+    "splitPercentage": 46,
+    "first": {
+      "direction": "column",
+      "splitPercentage": 58,
+      "first": "3D!arm",
+      "second": "Image!cam"
+    },
+    "second": {
+      "direction": "column",
+      "splitPercentage": 16,
+      "first": {
+        "direction": "row",
+        "splitPercentage": 62,
+        "first": {
+          "direction": "row",
+          "splitPercentage": 50,
+          "first": "Publish!recstart",
+          "second": "Publish!recstop"
+        },
+        "second": "RawMessages!status"
+      },
+      "second": {
+        "direction": "column",
+        "splitPercentage": 25,
+        "first": "Plot!hand",
+        "second": {
+          "direction": "column",
+          "splitPercentage": 33,
+          "first": "Plot!target",
+          "second": {
+            "direction": "column",
+            "splitPercentage": 50,
+            "first": "Plot!overflow",
+            "second": "Plot!flags"
+          }
+        }
+      }
+    }
+  }
+}
