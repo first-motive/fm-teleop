@@ -22,6 +22,22 @@ subscribe to the leader's `sensor_msgs/JointState`, map each sample to a single-
 `JointTrajectory`, and publish via `self.contract_publisher("arm_trajectory",
 topic=<follower controller>)`.
 
+## Utility Scripts
+
+This repo also carries standalone SO101 leader-arm bringup helpers under
+`fm_teleop_leader/scripts/`:
+
+- `classify-so101-leader-motor-variant.py` probes one STS3215 motor and estimates
+  whether it is a `C001`, `C044`, or `C046` variant from timed motion.
+- `compare-so101-leader-motor-motion.py` runs a repeatable left-center-right-center
+  motion so an operator can compare motors by eye when classification is ambiguous.
+- `configure-so101-leader-motors.py` walks an operator through assigning IDs to a
+  sorted pile of leader-arm motors.
+
+The timing thresholds used by the classifier live in
+`fm_teleop_leader/config/sts3215_variant_thresholds.json`, and the package test suite
+includes a focused regression test for the threshold bucketing logic.
+
 ## Build Type
 
 `ament_python`.

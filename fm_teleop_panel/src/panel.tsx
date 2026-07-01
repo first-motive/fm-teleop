@@ -21,7 +21,18 @@ import { ReactElement, useEffect, useLayoutEffect, useRef, useState } from "reac
 import { createRoot } from "react-dom/client";
 
 import { Joystick, ThumbStick } from "./joystick";
+import { keyboardBindingForKey, keyboardHelpForArm } from "./keyboard";
 import { Contribution, mergeContributions, scaleContribution, toMessage, Vec3 } from "./merge";
+import { detectRobotKeyFromDescription } from "./robotDescription";
+import { SERVO_STATUS_LABELS, SERVO_STATUS_TONES } from "./servoStatus";
+import {
+  buildSinglePointTrajectory,
+  buildSo101GripperTrajectory,
+  SO101_GRIPPER_TOPIC,
+  so101GripperKeyboardHelp,
+  so101GripperTargetForKey,
+  So101GripperTarget,
+} from "./so101";
 
 const REPEAT_MS = 50;
 
@@ -40,10 +51,17 @@ type ArmGroup = {
   label: string;
   servoTopic: string;
   jointTopic: string;
+  trajectoryTopic: string;
   commandFrame: string;
   joints: string[];
   enableCartesian: boolean;
   cartesianNote?: string;
+};
+
+type GripperConfig = {
+  label: string;
+  trajectoryTopic: string;
+  frame: string;
 };
 
 // Wheeled base. vx + vyaw always; vy only when the base is holonomic (the real AGV).
@@ -61,6 +79,7 @@ type HandSide = {
 type RobotConfig = {
   label: string;
   arms: ArmGroup[];
+  gripper?: GripperConfig;
   base?: BaseConfig;
   hands?: HandSide[];
 };
@@ -91,6 +110,7 @@ const ROBOTS: Record<string, RobotConfig> = {
         label: "Right arm",
         servoTopic: "/servo_node/delta_twist_cmds",
         jointTopic: "/servo_node/delta_joint_cmds",
+        trajectoryTopic: "/openarm_right_arm_controller/joint_trajectory",
         commandFrame: "openarm_right_base_link",
         joints: Array.from({ length: 7 }, (_, i) => `openarm_right_joint${i + 1}`),
         enableCartesian: true,
@@ -107,12 +127,18 @@ const ROBOTS: Record<string, RobotConfig> = {
         label: "Arm",
         servoTopic: "/servo_node/delta_twist_cmds",
         jointTopic: "/servo_node/delta_joint_cmds",
+        trajectoryTopic: "/so101_arm_controller/joint_trajectory",
         commandFrame: "base_link",
         joints: ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"],
         enableCartesian: true,
         cartesianNote: "5-DOF: translation tracks, orientation drifts",
       },
     ],
+    gripper: {
+      label: "Gripper",
+      trajectoryTopic: SO101_GRIPPER_TOPIC,
+      frame: "base_link",
+    },
   },
   // G1-D: both 7-DOF arms (each on its own servo_node, full 6-DOF Cartesian), the wheeled
   // base (sim diff-drive tracks vx + vyaw; the real AGV adds vy), and both Dex3 hands.
@@ -125,6 +151,7 @@ const ROBOTS: Record<string, RobotConfig> = {
         label: "Right arm",
         servoTopic: "/servo_node/delta_twist_cmds",
         jointTopic: "/servo_node/delta_joint_cmds",
+        trajectoryTopic: "/g1_right_arm_controller/joint_trajectory",
         commandFrame: "torso_link",
         joints: [
           "right_shoulder_pitch_joint",
@@ -142,6 +169,7 @@ const ROBOTS: Record<string, RobotConfig> = {
         label: "Left arm",
         servoTopic: "/servo_node_left/delta_twist_cmds",
         jointTopic: "/servo_node_left/delta_joint_cmds",
+        trajectoryTopic: "/g1_left_arm_controller/joint_trajectory",
         commandFrame: "torso_link",
         joints: [
           "left_shoulder_pitch_joint",
@@ -208,6 +236,10 @@ function advertisedTopics(cfg: RobotConfig): Array<{ topic: string; schema: stri
   for (const arm of cfg.arms) {
     out.push({ topic: arm.servoTopic, schema: "geometry_msgs/msg/TwistStamped" });
     out.push({ topic: arm.jointTopic, schema: "control_msgs/msg/JointJog" });
+    out.push({ topic: arm.trajectoryTopic, schema: "trajectory_msgs/msg/JointTrajectory" });
+  }
+  if (cfg.gripper) {
+    out.push({ topic: cfg.gripper.trajectoryTopic, schema: "trajectory_msgs/msg/JointTrajectory" });
   }
   if (cfg.base) {
     out.push({ topic: cfg.base.cmdVelTopic, schema: "geometry_msgs/msg/Twist" });
@@ -243,9 +275,54 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
   const held = useRef<Map<string, Contribution>>(new Map());
   // Per-hand slider vectors (one entry per finger joint), keyed by hand.key.
   const [handValues, setHandValues] = useState<Record<string, number[]>>({});
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [keyboardArmed, setKeyboardArmed] = useState(false);
+  const [detectedRobot, setDetectedRobot] = useState<string | undefined>(undefined);
+  const [servoStatus, setServoStatus] = useState<number>(0);
+  const homePositionsRef = useRef<Record<string, number[]>>({});
 
   useLayoutEffect(() => {
-    context.onRender = (_state, done) => setRenderDone(() => done);
+    context.watch("currentFrame");
+    context.onRender = (renderState, done) => {
+      for (const event of renderState.currentFrame ?? []) {
+        if (event.topic === "/robot_description") {
+          const description = (event.message as { data?: string } | undefined)?.data;
+          const nextDetected = detectRobotKeyFromDescription(description);
+          setDetectedRobot((prev) => (prev === nextDetected ? prev : nextDetected));
+        } else if (event.topic === "/servo_node/status") {
+          const nextStatus = (event.message as { data?: number } | undefined)?.data;
+          if (typeof nextStatus === "number") {
+            setServoStatus((prev) => (prev === nextStatus ? prev : nextStatus));
+          }
+        } else if (event.topic === "/joint_states") {
+          const message = event.message as
+            | { name?: string[]; position?: number[] }
+            | undefined;
+          const names = message?.name ?? [];
+          const positions = message?.position ?? [];
+          if (names.length === 0 || positions.length === 0) {
+            continue;
+          }
+          const byName = new Map<string, number>();
+          names.forEach((name, index) => {
+            const position = positions[index];
+            if (name != undefined && position != undefined) {
+              byName.set(name, position);
+            }
+          });
+          for (const arm of cfg.arms) {
+            if (homePositionsRef.current[arm.key]) {
+              continue;
+            }
+            const home = arm.joints.map((joint) => byName.get(joint));
+            if (home.every((value) => value != undefined)) {
+              homePositionsRef.current[arm.key] = home as number[];
+            }
+          }
+        }
+      }
+      setRenderDone(() => done);
+    };
     const topics = advertisedTopics(cfg);
     for (const { topic, schema } of topics) {
       context.advertise?.(topic, schema);
@@ -264,7 +341,9 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
       next[hand.key] = hand.joints.map(() => 0);
     }
     setHandValues(next);
+    homePositionsRef.current = {};
     held.current.clear();
+    setKeyboardArmed(false);
   }, [cfg]);
 
   // Robot picker, speed scalar, and deadzone live in the panel settings editor;
@@ -324,12 +403,40 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
     });
   }, [context, robot, speed, deadzone]);
 
+  useEffect(() => {
+    context.subscribe([
+      { topic: "/robot_description" },
+      { topic: "/servo_node/status" },
+      { topic: "/joint_states" },
+    ]);
+    return () => context.subscribe([]);
+  }, [context]);
+
+  useEffect(() => {
+    if (!detectedRobot || detectedRobot === robot) {
+      return;
+    }
+    held.current.clear();
+    setKeyboardArmed(false);
+    setRobot(detectedRobot);
+    context.saveState({ robot: detectedRobot, speed, deadzone } satisfies PanelState);
+  }, [context, deadzone, detectedRobot, robot, speed]);
+
+  const controlMismatch = detectedRobot != undefined && detectedRobot !== robot;
+  const servoTone = SERVO_STATUS_TONES[servoStatus] ?? "warn";
+  const servoStatusStyle =
+    servoTone === "stop"
+      ? { border: "1px solid rgba(192,57,43,0.6)", background: "rgba(192,57,43,0.08)" }
+      : servoTone === "warn"
+        ? { border: "1px solid rgba(217,119,6,0.6)", background: "rgba(217,119,6,0.08)" }
+        : { border: "1px solid rgba(34,197,94,0.4)", background: "rgba(34,197,94,0.08)" };
+
   // Re-publish held commands on a timer so motion continues while widgets are held.
   // All active contributions merge per topic, so two-thumb drags publish together.
   useEffect(() => {
     const timer = setInterval(() => {
       const active = held.current;
-      if (active.size === 0) return;
+      if (active.size === 0 || controlMismatch) return;
       const stamp = nowStamp();
       const factor = speedRef.current;
       for (const c of mergeContributions(active.values())) {
@@ -337,7 +444,7 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
       }
     }, REPEAT_MS);
     return () => clearInterval(timer);
-  }, [context]);
+  }, [context, controlMismatch]);
 
   useEffect(() => renderDone?.(), [renderDone]);
 
@@ -352,6 +459,61 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
   const stop = () => {
     held.current.clear();
   };
+
+  useEffect(() => {
+    if (!keyboardArmed || cfg.arms.length === 0) {
+      return;
+    }
+    const arm = cfg.arms[0]!;
+    let activeId: string | undefined;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      const gripperTarget = cfg.gripper ? so101GripperTargetForKey(event.key) : undefined;
+      if (gripperTarget) {
+        event.preventDefault();
+        if (!event.repeat) {
+          stop();
+          context.publish?.(
+            cfg.gripper!.trajectoryTopic,
+            buildSo101GripperTrajectory(gripperTarget, nowStamp(), cfg.gripper!.frame),
+          );
+        }
+        return;
+      }
+      const binding = keyboardBindingForKey(arm, event.key);
+      if (!binding) {
+        return;
+      }
+      event.preventDefault();
+      if (activeId && activeId !== binding.id) {
+        held.current.delete(activeId);
+      }
+      activeId = binding.id;
+      held.current.set(binding.id, binding.contribution);
+    };
+
+    const onKeyUp = (event: KeyboardEvent) => {
+      const binding = keyboardBindingForKey(arm, event.key);
+      if (!binding) {
+        return;
+      }
+      event.preventDefault();
+      held.current.delete(binding.id);
+      if (activeId === binding.id) {
+        activeId = undefined;
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      if (activeId) {
+        held.current.delete(activeId);
+      }
+    };
+  }, [keyboardArmed, cfg]);
 
   // Speed slider in the dashboard header mirrors the settings field; both persist.
   const onSpeedChange = (v: number) => {
@@ -370,6 +532,23 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
     context.publish?.(hand.presetTopic, { data: name });
   };
 
+  const publishHomePose = (arm: ArmGroup) => {
+    const positions = homePositionsRef.current[arm.key];
+    if (!positions) {
+      return;
+    }
+    stop();
+    context.publish?.(
+      arm.trajectoryTopic,
+      buildSinglePointTrajectory(arm.commandFrame, arm.joints, positions, nowStamp(), 2),
+    );
+  };
+
+  const publishGripper = (gripper: GripperConfig, target: So101GripperTarget) => {
+    stop();
+    context.publish?.(gripper.trajectoryTopic, buildSo101GripperTrajectory(target, nowStamp(), gripper.frame));
+  };
+
   const publishSlider = (hand: HandSide, index: number, value: number) => {
     setHandValues((prev) => {
       const current = prev[hand.key] ?? hand.joints.map(() => 0);
@@ -384,9 +563,21 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
   };
 
   const hands = cfg.hands ?? [];
+  const keyboardHelp = cfg.arms.length > 0 ? keyboardHelpForArm(cfg.arms[0]!) : [];
+  const gripperHelp = cfg.gripper ? so101GripperKeyboardHelp() : [];
 
   return (
     <div
+      ref={rootRef}
+      tabIndex={0}
+      onFocus={() => setKeyboardArmed(true)}
+      onBlur={(event) => {
+        const next = event.relatedTarget as Node | null;
+        if (!rootRef.current?.contains(next)) {
+          setKeyboardArmed(false);
+          stop();
+        }
+      }}
       style={{
         height: "100%",
         overflowY: "auto",
@@ -396,6 +587,8 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
         display: "flex",
         flexDirection: "column",
         gap: "0.75rem",
+        outline: keyboardArmed ? "2px solid #4f46e5" : "none",
+        outlineOffset: "-2px",
       }}
     >
       {/* Dashboard header: title, always-reachable global STOP, speed scalar. */}
@@ -447,6 +640,96 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
         </button>
       </header>
 
+      {detectedRobot && (
+        <section
+          style={{
+            border: "1px solid rgba(79,70,229,0.45)",
+            borderRadius: "0.35rem",
+            padding: "0.55rem 0.7rem",
+            fontSize: "0.82rem",
+            background: "rgba(79,70,229,0.08)",
+          }}
+        >
+          Running robot detected from <code>/robot_description</code>: <strong>{robotConfig(detectedRobot).label}</strong>
+        </section>
+      )}
+
+      {controlMismatch && (
+        <section
+          style={{
+            border: "1px solid rgba(192,57,43,0.6)",
+            borderRadius: "0.35rem",
+            padding: "0.55rem 0.7rem",
+            fontSize: "0.82rem",
+            background: "rgba(192,57,43,0.08)",
+          }}
+        >
+          Panel robot did not match the running robot. Teleop output is paused while the panel switches to the detected robot.
+        </section>
+      )}
+
+      <section
+        style={{
+          borderRadius: "0.35rem",
+          padding: "0.55rem 0.7rem",
+          fontSize: "0.82rem",
+          ...servoStatusStyle,
+        }}
+      >
+        Servo status: <strong>{SERVO_STATUS_LABELS[servoStatus] ?? `Code ${servoStatus}`}</strong>
+      </section>
+
+      {robot === "so101" && (
+        <section
+          style={{
+            border: "1px solid rgba(59,130,246,0.45)",
+            borderRadius: "0.35rem",
+            padding: "0.55rem 0.7rem",
+            fontSize: "0.82rem",
+            background: "rgba(59,130,246,0.08)",
+            lineHeight: 1.45,
+          }}
+        >
+          SO101 keyboard jogging still goes through MoveIt Servo. Near forward reach, Servo may slow or stop on
+          <strong> Approaching singularity</strong>, <strong>Singularity stop</strong>, <strong>Near collision</strong>,
+          <strong> Collision stop</strong>, or <strong>Joint limit stop</strong>. That can feel like a front wall even
+          though MuJoCo is fine, and Servo may resolve the motion differently than a raw per-joint controller.
+        </section>
+      )}
+
+      <section
+        style={{
+          border: "1px solid rgba(255,255,255,0.12)",
+          borderRadius: "0.35rem",
+          padding: "0.6rem 0.75rem",
+          display: "flex",
+          flexDirection: "column",
+          gap: "0.4rem",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+          <strong>Keyboard teleop</strong>
+          <button onClick={() => rootRef.current?.focus()} style={{ cursor: "pointer" }}>
+            {keyboardArmed ? "Panel focused" : "Click to arm keyboard"}
+          </button>
+          <span style={{ fontSize: "0.8rem", opacity: 0.75 }}>
+            Uses the first arm of the selected robot and sends one joint command at a time.
+          </span>
+        </div>
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", fontSize: "0.8rem", opacity: 0.85 }}>
+          {keyboardHelp.map((entry) => (
+            <span key={entry.key}>
+              <strong>{entry.key}</strong> {entry.action}
+            </span>
+          ))}
+          {gripperHelp.map((entry) => (
+            <span key={entry.key}>
+              <strong>{entry.key}</strong> {entry.action}
+            </span>
+          ))}
+        </div>
+      </section>
+
       {/* Primary controls: arm Cartesian sticks + base, always on, in a grid that
           reflows from two-up on a tablet to one column on a phone. */}
       <div
@@ -458,7 +741,16 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
       >
         {cfg.arms.map((arm) => (
           <section key={arm.key}>
-            <h4 style={{ margin: "0 0 0.25rem" }}>{arm.label}</h4>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap", margin: "0 0 0.25rem" }}>
+              <h4 style={{ margin: 0 }}>{arm.label}</h4>
+              <button
+                onClick={() => publishHomePose(arm)}
+                disabled={!homePositionsRef.current[arm.key]}
+                style={{ cursor: homePositionsRef.current[arm.key] ? "pointer" : "default" }}
+              >
+                Return to default
+              </button>
+            </div>
             {arm.enableCartesian && (
               <Section title={`Cartesian (unitless)${arm.cartesianNote ? ` — ${arm.cartesianNote}` : ""}`}>
                 <ArmCartesianSticks arm={arm} deadzone={deadzone} setHeld={setHeld} clearHeld={clearHeld} />
@@ -487,6 +779,12 @@ function TeleopPanel({ context }: { context: PanelExtensionContext }): ReactElem
                 })}
               </div>
             </details>
+            {cfg.gripper && (
+              <Section title={`${cfg.gripper.label} (one-shot trajectory)`}>
+                <button onClick={() => publishGripper(cfg.gripper!, "open")}>Open</button>
+                <button onClick={() => publishGripper(cfg.gripper!, "closed")}>Close</button>
+              </Section>
+            )}
           </section>
         ))}
 
