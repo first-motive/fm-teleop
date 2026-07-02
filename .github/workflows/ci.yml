@@ -82,7 +82,7 @@ jobs:
       # emulation segfaults on heavy glibc postinst (libc-bin/ldconfig under the
       # moveit install). Newer qemu emulates that path cleanly.
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
         with:
           image: tonistiigi/binfmt:qemu-v10.2.3
 
