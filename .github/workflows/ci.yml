@@ -3,9 +3,9 @@ name: CI
 on:
   push:
     branches: ["**"]
-    paths-ignore: ["**.md", "docs/**", "LICENSE", ".gitignore"]
+    paths-ignore: ["**.md", "docs/**", "LICENSE", ".gitignore", "plans/**"]
   pull_request:
-    paths-ignore: ["**.md", "docs/**", "LICENSE", ".gitignore"]
+    paths-ignore: ["**.md", "docs/**", "LICENSE", ".gitignore", "plans/**"]
 
 # Standalone build: clone this repo, pull its .repos siblings + externals, then
 # colcon build + test in a Humble container. Proves the package stands on its own
