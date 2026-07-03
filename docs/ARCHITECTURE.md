@@ -1,6 +1,6 @@
 # Architecture
 
-The teleop layer of First Motive's ROS2 (Humble) stack. It converges many input
+The teleop layer of First Motive's ROS2 stack. It converges many input
 modalities — gamepad, SpaceMouse, leader arm, VR, vision, a Foxglove panel — onto
 one command contract. Every source publishes standard ROS messages on fixed
 channels; the sinks in the control stack consume them. There is no custom message

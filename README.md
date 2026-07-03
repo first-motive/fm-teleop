@@ -6,7 +6,7 @@ Teleop layer for First Motive's ROS2 stack. Groups every teleop input — device
 leader arm, VR, and vision — behind one command contract, plus the Foxglove
 operator panel.
 
-Part of First Motive's ROS2 (Humble) stack. Builds standalone here; assembled
+Part of First Motive's ROS2 stack. Builds standalone here; assembled
 with the other six package repos by
 [`fm-ros2`](https://github.com/first-motive/fm-ros2).
 
