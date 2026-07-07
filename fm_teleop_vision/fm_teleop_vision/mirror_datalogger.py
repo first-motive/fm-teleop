@@ -459,7 +459,10 @@ def main():
     ap.add_argument("--ee-frame", default="openarm_right_link7")
     ap.add_argument("--hand-span-m", type=float, default=0.09)
     ap.add_argument("--arm-joint-prefix", default="openarm_right_joint")
-    args = ap.parse_args()
+    # parse_known_args (not parse_args) so the ROS args launch_ros injects when this runs
+    # as a launch Node (--ros-args -r __node:=... etc.) don't abort argparse. The CLI /
+    # capture_mirror.sh path is unaffected (it passes only the flags above).
+    args, _ = ap.parse_known_args()
 
     rclpy.init()
     node = MirrorDataLogger(

@@ -15,6 +15,16 @@ setup(
         # then, so the build never fails on a missing model. Installed so hand_tracker can
         # resolve them from the package share dir.
         ("share/" + package_name + "/models", glob("models/*.task")),
+        # The web control GUI (index.html) — a dependency-free page that talks to the
+        # foxglove_bridge websocket. Installed so a launch/server can serve it from the
+        # package share; the run.sh host path opens the source copy directly. Glob files
+        # per-type (not "webgui/*") so the fonts/ subdir is not picked up as a data file.
+        ("share/" + package_name + "/webgui",
+         glob("webgui/*.html") + glob("webgui/*.js") + glob("webgui/*.svg")),
+        # Bundled fonts for the GUI (offline; no CDN).
+        ("share/" + package_name + "/webgui/fonts", glob("webgui/fonts/*")),
+        # Vendored 3D libs (three.js + loaders + urdf-loader) for the in-GUI arm viewer.
+        ("share/" + package_name + "/webgui/vendor", glob("webgui/vendor/*")),
     ],
     # mediapipe + opencv are pip-only (no rosdep key); install them into the runtime
     # image to run the node. The pure-Python tests (retarget, filter) and the mocked
@@ -32,6 +42,12 @@ setup(
             # 1:1 hand-mirroring path (alongside the wrist-jog vision_source):
             "hand_tracker = fm_teleop_vision.hand_tracker:main",
             "mirror_source = fm_teleop_vision.mirror_source:main",
+            # Session recorder (rosbag + synced CSV/JSONL, /capture/record toggle) and the
+            # RESET-button re-home node (/vision/reset -> disengage + drive the arm home).
+            "mirror_datalogger = fm_teleop_vision.mirror_datalogger:main",
+            "arm_reset = fm_teleop_vision.arm_reset:main",
+            # Serves recorded sessions (index/detail) to the web GUI's recordings viewer.
+            "capture_browser = fm_teleop_vision.capture_browser:main",
         ],
     },
 )

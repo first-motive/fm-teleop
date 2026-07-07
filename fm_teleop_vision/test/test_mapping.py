@@ -303,6 +303,30 @@ def test_box_clamp_inside_is_zero_overflow():
     assert overflow == (0.0, 0.0, 0.0)
 
 
+def test_step_limit_passthrough_within_budget():
+    # A move smaller than the per-tick budget on every axis is published unchanged.
+    prev = (0.30, 0.00, 0.40)
+    target = (0.31, -0.01, 0.405)
+    assert mapping.step_limit(prev, target, 0.02) == pytest.approx(target)
+
+
+def test_step_limit_clamps_large_multi_axis_jump():
+    # A jump beyond the budget is slewed to prev +/- max_step per axis (sign preserved).
+    prev = (0.30, 0.00, 0.40)
+    target = (0.50, -0.15, 0.30)      # +0.20, -0.15, -0.10 -> all exceed 0.02
+    out = mapping.step_limit(prev, target, 0.02)
+    assert out == pytest.approx((0.32, -0.02, 0.38))
+
+
+def test_step_limit_disabled_returns_target():
+    prev = (0.30, 0.00, 0.40)
+    target = (0.50, -0.15, 0.30)
+    # None prev (first tick after engage) and non-positive budget both disable the cap.
+    assert mapping.step_limit(None, target, 0.02) == pytest.approx(target)
+    assert mapping.step_limit(prev, target, 0.0) == pytest.approx(target)
+    assert mapping.step_limit(prev, target, -1.0) == pytest.approx(target)
+
+
 def test_control_position_normalizes_y_by_width():
     pos = mapping.control_position((960.0, 540.0), (960.0, 640.0), 1920)
     assert pos[0] == pytest.approx(0.5)
