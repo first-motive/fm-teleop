@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "motor_family": "sts3215",
+  "travel_counts": 1536,
+  "position_tolerance_counts": 12,
+  "consecutive_settle_samples": 3,
+  "boundary_margin_s": 0.03,
+  "probe_acceleration": 254,
+  "variants": {
+    "C046": {
+      "gear_ratio": "1/147",
+      "seconds_per_60_deg": 0.16
+    },
+    "C044": {
+      "gear_ratio": "1/191",
+      "seconds_per_60_deg": 0.18
+    },
+    "C001": {
+      "gear_ratio": "1/345",
+      "seconds_per_60_deg": 0.238
+    }
+  }
+}
