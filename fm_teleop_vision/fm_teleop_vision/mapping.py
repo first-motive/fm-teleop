@@ -384,6 +384,22 @@ def metric_mirror_target(ee_ref_pos, hand_ref, hand_now, axis_map, *,
     return box_clamp(raw, workspace_box)
 
 
+def step_limit(prev, target, max_step):
+    """Rate-limit a per-tick target: cap each component of (target - prev) to +/-max_step.
+
+    A single noisy landmark frame otherwise pushes the mirror target ~20 mm in one tick
+    (the ~0.8 m/unit engage scale amplifies MediaPipe jitter); clamping the step at a fixed
+    metric budget per tick turns that spike into a bounded slew without touching the steady
+    signal. ``prev`` is the last published target; ``max_step`` is metres per tick (so the
+    EE speed ceiling is max_step * publish_rate). Disabled — returns ``target`` unchanged —
+    when ``prev`` is None (first tick after engage) or ``max_step`` <= 0.
+    """
+    if prev is None or max_step <= 0.0:
+        return tuple(target)
+    return tuple(prev[i] + retarget.clamp(target[i] - prev[i], -max_step, max_step)
+                 for i in range(3))
+
+
 # --- control: gripper ----------------------------------------------------------------
 
 

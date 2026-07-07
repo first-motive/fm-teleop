@@ -90,6 +90,13 @@ class MirrorSource(TeleopSource):
         self.declare_parameter("workspace_min", [-0.10, -0.60, -0.55])
         self.declare_parameter("workspace_max", [0.55, 0.30, 0.25])
 
+        # Per-tick target step cap (metres/tick at publish_rate) — bounds how far the
+        # published target may move between ticks so a single noisy landmark frame can't
+        # inject a ~20 mm jump into PoseTracking (see mapping.step_limit). The EE speed
+        # ceiling is max_step_m * publish_rate. 0.0 disables (default keeps prior behaviour;
+        # set in vision.yaml). Live-tunable.
+        self.declare_parameter("max_step_m", 0.0)
+
         # tracking_active can flicker false for 1-2 frames near the frame edge / on fast motion;
         # treat tracking as still-good within this grace window so a blip does NOT re-index
         # (re-latching would jump the arm). Only a sustained loss / a disengage drops commanding.
@@ -104,7 +111,7 @@ class MirrorSource(TeleopSource):
         # Publish the full internal mapping state each commanding tick (latched hand_ref /
         # ee_ref, W_m, per-axis scale, the mapped offset, the PRE-clamp target and the
         # workspace overflow) on debug_topic as a Float64MultiArray (layout label
-        # "mirror_debug_v1"; field order documented in scripts/mirror_datalogger.py). These
+        # "mirror_debug_v1"; field order documented in fm_teleop_vision/mirror_datalogger.py). These
         # are the quantities the two published poses (hand_pose, target_pose) cannot reveal:
         # what was latched at engage and how much motion the workspace box silently ate.
         # Off by default (opt-in), live-settable, ~1 tiny msg/tick when on — costs nothing off.
@@ -135,6 +142,7 @@ class MirrorSource(TeleopSource):
         self._ws_min = list(gp("workspace_min").value)
         self._ws_max = list(gp("workspace_max").value)
         self._ws_box = (tuple(self._ws_min), tuple(self._ws_max))
+        self._max_step_m = float(gp("max_step_m").value)
         self._grace = float(gp("tracking_grace").value)
         self._enable_grip = bool(gp("enable_grip").value)
         self._grip_open_below = float(gp("grip_open_below").value)
@@ -173,6 +181,7 @@ class MirrorSource(TeleopSource):
         self._w_m = None            # image width (m) at the hand, latched at engage
         self._ee_ref_pos = None     # EE position (command frame) latched at engage
         self._ee_ref_quat = None    # EE orientation (command frame) latched at engage; held
+        self._last_target = None    # last published target position (for the per-tick step cap)
         self._last_tracking_t = None
         self._grip_state = "open"
         self._warned_tf = False
@@ -216,6 +225,8 @@ class MirrorSource(TeleopSource):
             elif n == "workspace_max":
                 self._ws_max = list(p.value)
                 self._ws_box = (tuple(self._ws_min), tuple(self._ws_max))
+            elif n == "max_step_m":
+                self._max_step_m = float(p.value)
             elif n == "tracking_grace":
                 self._grace = float(p.value)
             elif n == "command_timeout":
@@ -282,7 +293,7 @@ class MirrorSource(TeleopSource):
                            target, overflow):
         """Emit the full internal mapping state (see the class-level diagnostics note).
 
-        Field order matches MIRROR_DEBUG_FIELDS in scripts/mirror_datalogger.py. W_m is the
+        Field order matches MIRROR_DEBUG_FIELDS in fm_teleop_vision/mirror_datalogger.py. W_m is the
         latched image-width-in-metres; -1.0 is the sentinel for a degenerate hand size at
         engage (fallback_scale used instead — a positive real W_m is never negative).
         """
@@ -320,11 +331,25 @@ class MirrorSource(TeleopSource):
         )
         can_command = self._engaged and tracking_ok and self._fresh()
 
+        # Gripper follows the hand's open/close as soon as the hand is tracked+engaged —
+        # decoupled from the arm's ee_ref latch below. Previously the grip publish sat at the
+        # END of the arm-commanding path, so a tf hiccup / re-latch (ee_ref not yet resolved)
+        # silently froze the gripper even while the hand was clearly opening/closing.
+        if self._grip_pub is not None and can_command:
+            state = mapping.grip_preset(
+                self._curl, self._grip_state,
+                open_below=self._grip_open_below, close_above=self._grip_close_above,
+            )
+            if state != self._grip_state:
+                self._grip_state = state
+                self._grip_pub.publish(String(data=state))
+
         if not can_command:
             # Disengaged / tracking lost / stale -> STOP publishing targets. PoseTracking's
             # target_pose_timeout elapses and the node re-seeds a hold at the current EE, so
             # the arm holds in place (the "mouse pen-up" — no command, no drift).
             self._commanding = False
+            self._last_target = None   # next engage re-latches; don't slew from a stale target
             return
 
         hand_now = self._pose[0]
@@ -362,6 +387,7 @@ class MirrorSource(TeleopSource):
                     self._w_m, self._hand_ref, self._ee_ref_pos, scale0,
                     (0.0, 0.0, 0.0), self._ee_ref_pos, self._ee_ref_pos, (0.0, 0.0, 0.0),
                 )
+            self._last_target = self._ee_ref_pos   # step cap measures the first tick from here
             self._publish_target(self._ee_ref_pos)   # zero-delta target -> hold, no jump
             return
 
@@ -383,23 +409,21 @@ class MirrorSource(TeleopSource):
                 ),
                 throttle_duration_sec=1.0,
             )
+        # Per-tick step cap against the last published target: bound single-frame jumps from
+        # landmark jitter (the workspace box only bounds absolute reach, not per-tick slew).
+        capped = mapping.step_limit(self._last_target, target, self._max_step_m)
         if self._publish_debug:
+            # preclamp/moved reconstruct the raw pre-workspace-clamp intent from the
+            # workspace-clamped target (pre step cap); the logged target is what we publish.
             preclamp = tuple(target[i] + overflow[i] for i in range(3))  # raw, pre-clamp
             moved = tuple(preclamp[i] - self._ee_ref_pos[i] for i in range(3))
             self._publish_debug_msg(
                 self._w_m, self._hand_ref, self._ee_ref_pos, scale,
-                moved, preclamp, target, overflow,
+                moved, preclamp, capped, overflow,
             )
-        self._publish_target(target)
-
-        if self._grip_pub is not None:
-            state = mapping.grip_preset(
-                self._curl, self._grip_state,
-                open_below=self._grip_open_below, close_above=self._grip_close_above,
-            )
-            if state != self._grip_state:
-                self._grip_state = state
-                self._grip_pub.publish(String(data=state))
+        self._last_target = capped
+        self._publish_target(capped)
+        # (grip is published above, decoupled from this arm-commanding path)
 
 
 def main(args=None):
