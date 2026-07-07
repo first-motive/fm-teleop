@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 import time
 from dataclasses import dataclass
 
@@ -63,6 +64,14 @@ class CameraSource:
         self._total_reconnects = 0
         self._last_good_t = None
 
+        # Latest-frame handoff: a reader thread drains the stream and keeps only the most
+        # recent frame, so a slow consumer (MediaPipe) never falls behind a growing capture
+        # buffer (which showed up as tens of seconds of accumulating video latency).
+        self._latest = None
+        self._latest_seq = 0
+        self._reader = None
+        self._cond = threading.Condition()
+
     @property
     def resolved_source(self):
         """Return an int device index or a URL string."""
@@ -96,6 +105,12 @@ class CameraSource:
         flag = self._backend_flag()
         log.info("Opening capture source=%r (backend flag=%d)", src, flag)
         self._cap = cv2.VideoCapture(src, flag)
+        # Keep the backend buffer tiny; combined with the reader thread this bounds latency
+        # to ~one frame instead of letting a slow consumer accumulate a growing backlog.
+        try:
+            self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
         if self._cap.isOpened():
             self._last_good_t = time.time()
             self._consecutive_failures = 0
@@ -121,11 +136,41 @@ class CameraSource:
             backoff = min(backoff * self._backoff_factor, self._backoff_max)
 
     def frames(self):
-        """Yield (frame_bgr, wall_clock_ts) forever; reconnect transparently on stalls."""
+        """Yield (frame_bgr, wall_clock_ts) forever — always the LATEST frame.
+
+        A background reader thread continuously drains the stream (fast MJPEG decode) and
+        keeps only the most recent frame; this generator hands the consumer that newest
+        frame and drops everything in between, so a slow consumer (e.g. MediaPipe) can never
+        lag behind a growing capture buffer. Reconnect/stall handling lives in the reader.
+        """
         if self._cap is None or not self._cap.isOpened():
             if not self.open():
                 log.warning("Initial capture open failed; entering reconnect loop")
                 self._reconnect()
+        self._start_reader()
+        last_seq = 0
+        while True:
+            with self._cond:
+                self._cond.wait_for(
+                    lambda: self._latest_seq != last_seq,
+                    timeout=self._max_since_good + 1.0,
+                )
+                if self._latest_seq == last_seq:
+                    continue  # timed out waiting; the reader handles any stall/reconnect
+                frame, ts = self._latest
+                last_seq = self._latest_seq
+            yield frame, ts
+
+    def _start_reader(self):
+        if self._reader is not None:
+            return
+        self._reader = threading.Thread(
+            target=self._reader_loop, name="camera_reader", daemon=True
+        )
+        self._reader.start()
+
+    def _reader_loop(self):
+        """Drain the stream forever, publishing only the newest frame (drops the backlog)."""
         while True:
             ok, frame = self._cap.read()
             now = time.time()
@@ -133,7 +178,10 @@ class CameraSource:
                 self._consecutive_failures = 0
                 self._last_good_t = now
                 self._total_good_frames += 1
-                yield frame, now
+                with self._cond:
+                    self._latest = (frame, now)
+                    self._latest_seq += 1
+                    self._cond.notify_all()
                 continue
 
             # Failed read.
