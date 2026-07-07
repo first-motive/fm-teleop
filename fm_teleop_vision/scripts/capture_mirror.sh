@@ -15,6 +15,9 @@
 # --session-name reachtest, --control-topic /my/topic).
 #
 #   docker compose ... exec fm bash /ws/src/fm-teleop/fm_teleop_vision/scripts/capture_mirror.sh [args]
+#
+# Note: vision_session.launch.py starts mirror_datalogger for you, so this script is only
+# needed for a standalone / one-shot (--auto-start) capture outside that launch.
 set -euo pipefail
 
 # ROS setup scripts reference unbound vars; source them with nounset off.
@@ -24,4 +27,6 @@ source /ws/install/setup.bash
 set -u
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
 
-exec python3 /ws/src/fm-teleop/fm_teleop_vision/scripts/mirror_datalogger.py "$@"
+# mirror_datalogger is now a fm_teleop_vision console_script (module lives in the package),
+# so run it via ros2 run rather than a hardcoded script path.
+exec ros2 run fm_teleop_vision mirror_datalogger "$@"
