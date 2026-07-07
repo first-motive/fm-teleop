@@ -58,6 +58,33 @@
       "advancedView": true,
       "value": "{\n  \"data\": false\n}"
     },
+    "Publish!engage": {
+      "topicName": "/vision/engage",
+      "datatype": "std_msgs/msg/Bool",
+      "buttonText": "▶ ENGAGE",
+      "buttonTooltip": "Latch mirroring on: anchors the arm at its current pose to your hand. Get into a comfortable pose first.",
+      "buttonColor": "#2563eb",
+      "advancedView": true,
+      "value": "{\n  \"data\": true\n}"
+    },
+    "Publish!disengage": {
+      "topicName": "/vision/engage",
+      "datatype": "std_msgs/msg/Bool",
+      "buttonText": "⏸ DISENGAGE",
+      "buttonTooltip": "Stop mirroring; the arm holds where it is (no re-home). Re-engage to re-anchor.",
+      "buttonColor": "#64748b",
+      "advancedView": true,
+      "value": "{\n  \"data\": false\n}"
+    },
+    "Publish!reset": {
+      "topicName": "/vision/reset",
+      "datatype": "std_msgs/msg/Bool",
+      "buttonText": "⟲ RESET / HOME",
+      "buttonTooltip": "Disengage and drive the arm back to its home pose, then re-engage to start over. Do not ENGAGE while it homes.",
+      "buttonColor": "#d97706",
+      "advancedView": true,
+      "value": "{\n  \"data\": true\n}"
+    },
     "RawMessages!status": {
       "topicPath": "/capture/status.data"
     },
@@ -140,14 +167,29 @@
       "splitPercentage": 16,
       "first": {
         "direction": "row",
-        "splitPercentage": 62,
+        "splitPercentage": 55,
         "first": {
           "direction": "row",
-          "splitPercentage": 50,
-          "first": "Publish!recstart",
-          "second": "Publish!recstop"
+          "splitPercentage": 40,
+          "first": "Publish!engage",
+          "second": {
+            "direction": "row",
+            "splitPercentage": 50,
+            "first": "Publish!disengage",
+            "second": "Publish!reset"
+          }
         },
-        "second": "RawMessages!status"
+        "second": {
+          "direction": "row",
+          "splitPercentage": 62,
+          "first": {
+            "direction": "row",
+            "splitPercentage": 50,
+            "first": "Publish!recstart",
+            "second": "Publish!recstop"
+          },
+          "second": "RawMessages!status"
+        }
       },
       "second": {
         "direction": "column",
