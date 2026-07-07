@@ -22,6 +22,8 @@ setup(
             "joy_to_servo = fm_teleop_device.joy_to_servo:main",
             "spacenav_to_servo = fm_teleop_device.spacenav_to_servo:main",
             "g1_hand_teleop = fm_teleop_device.g1_hand_teleop:main",
+            # Maps a hand-preset (open|close) onto a gripper JointTrajectoryController.
+            "gripper_teleop = fm_teleop_device.gripper_teleop:main",
         ],
     },
 )
