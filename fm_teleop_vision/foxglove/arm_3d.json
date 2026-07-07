@@ -1,0 +1,41 @@
+{
+  "configById": {
+    "3D!arm": {
+      "cameraState": {
+        "perspective": true,
+        "distance": 1.8,
+        "phi": 62,
+        "thetaOffset": 45,
+        "targetOffset": [0, 0, 0.15],
+        "target": [0, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "fovy": 45,
+        "near": 0.01,
+        "far": 5000
+      },
+      "followMode": "follow-pose",
+      "followTf": "openarm_right_base_link",
+      "scene": {
+        "meshUpAxis": "z_up",
+        "enableStats": false,
+        "transforms": { "showLabel": false, "axisScale": 0, "enablePreloading": false }
+      },
+      "transforms": {},
+      "topics": {
+        "/robot_description": { "visible": true },
+        "/target_pose": { "visible": true }
+      },
+      "layers": {},
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose"
+      }
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": { "speed": 1 },
+  "layout": "3D!arm"
+}
