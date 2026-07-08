@@ -15,16 +15,9 @@ setup(
         # then, so the build never fails on a missing model. Installed so hand_tracker can
         # resolve them from the package share dir.
         ("share/" + package_name + "/models", glob("models/*.task")),
-        # The web control GUI (index.html) — a dependency-free page that talks to the
-        # foxglove_bridge websocket. Installed so a launch/server can serve it from the
-        # package share; the run.sh host path opens the source copy directly. Glob files
-        # per-type (not "webgui/*") so the fonts/ subdir is not picked up as a data file.
-        ("share/" + package_name + "/webgui",
-         glob("webgui/*.html") + glob("webgui/*.js") + glob("webgui/*.svg")),
-        # Bundled fonts for the GUI (offline; no CDN).
-        ("share/" + package_name + "/webgui/fonts", glob("webgui/fonts/*")),
-        # Vendored 3D libs (three.js + loaders + urdf-loader) for the in-GUI arm viewer.
-        ("share/" + package_name + "/webgui/vendor", glob("webgui/vendor/*")),
+        # The web control GUI moved to the fm_viewer package (fm-app), which installs it
+        # as the system-wide panel viewer. This package keeps only the vision nodes it
+        # feeds over the foxglove_bridge websocket.
     ],
     # mediapipe + opencv are pip-only (no rosdep key); install them into the runtime
     # image to run the node. The pure-Python tests (retarget, filter) and the mocked
