@@ -73,6 +73,72 @@ def test_finger_curl_degenerate_zero():
     assert mapping.finger_curl(p, p, [p], [p]) == 0.0
 
 
+# --- finger joint angles -------------------------------------------------------------
+
+
+# Each finger's four landmarks lie on a ray from the wrist, so every finger is perfectly
+# straight (zero flexion) while adjacent fingers splay apart (non-zero abduction).
+_STRAIGHT_HAND_DIRS = {
+    (1, 2, 3, 4): (-0.5, 1.0, 0.0),      # thumb
+    (5, 6, 7, 8): (-0.2, 1.0, 0.0),      # index
+    (9, 10, 11, 12): (0.0, 1.0, 0.0),    # middle
+    (13, 14, 15, 16): (0.15, 1.0, 0.0),  # ring
+    (17, 18, 19, 20): (0.3, 1.0, 0.0),   # pinky
+}
+
+
+def _straight_hand():
+    pts = [(0.0, 0.0, 0.0)] * 21          # wrist at origin (index 0)
+    for chain, dv in _STRAIGHT_HAND_DIRS.items():
+        n = math.sqrt(dv[0] ** 2 + dv[1] ** 2 + dv[2] ** 2)
+        u = (dv[0] / n, dv[1] / n, dv[2] / n)
+        for idx, r in zip(chain, (0.06, 0.09, 0.11, 0.13)):
+            pts[idx] = (u[0] * r, u[1] * r, u[2] * r)
+    return pts
+
+
+def test_finger_joint_angles_length():
+    assert len(mapping.finger_joint_angles(_straight_hand())) == mapping.N_JOINT_ANGLES == 19
+
+
+def _angle(u, v):
+    du = math.sqrt(sum(c * c for c in u))
+    dv = math.sqrt(sum(c * c for c in v))
+    return math.acos(sum(a * b for a, b in zip(u, v)) / (du * dv))
+
+
+def test_straight_hand_zero_flexion_positive_abduction():
+    a = mapping.finger_joint_angles(_straight_hand())
+    for flex in a[:15]:                  # every per-finger flexion angle
+        assert flex == pytest.approx(0.0, abs=1e-6)
+    for splay in a[15:]:                 # adjacent fingers are spread apart
+        assert splay > 0.0
+    # thumb->index abduction equals the angle between their rays.
+    expected = _angle((-0.5, 1.0, 0.0), (-0.2, 1.0, 0.0))
+    assert a[15] == pytest.approx(expected, abs=1e-6)
+
+
+def test_bent_pip_is_ninety_degrees():
+    pts = _straight_hand()
+    pts[5] = (0.0, 0.06, 0.0)            # index mcp
+    pts[6] = (0.0, 0.09, 0.0)            # index pip   (mcp->pip along +y)
+    pts[7] = (0.03, 0.09, 0.0)           # index dip   (pip->dip along +x -> 90 deg)
+    pts[8] = (0.05, 0.09, 0.0)           # index tip
+    a = mapping.finger_joint_angles(pts)
+    assert a[4] == pytest.approx(math.pi / 2, abs=1e-6)   # index PIP flexion
+
+
+def test_finger_joint_angles_accepts_dict():
+    pts = _straight_hand()
+    as_dict = {i: p for i, p in enumerate(pts)}
+    assert mapping.finger_joint_angles(as_dict) == mapping.finger_joint_angles(pts)
+
+
+def test_finger_joint_angles_degenerate_zero():
+    a = mapping.finger_joint_angles([(0.0, 0.0, 0.0)] * 21)
+    assert a == [0.0] * mapping.N_JOINT_ANGLES
+
+
 # --- axis map ------------------------------------------------------------------------
 
 

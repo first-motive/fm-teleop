@@ -85,6 +85,7 @@ class HandFrame:
     image_h: int
     timestamp_ms: int
     inference_ms: float
+    score: float = 0.0  # model handedness/presence confidence in [0, 1]
 
 
 class HandEstimator:
@@ -179,20 +180,90 @@ class HandEstimator:
             )
         return HandFrame(True, landmarks, handed, w, h, ts_ms, inference_ms)
 
+    def process_hands(self, frame_bgr, wall_ts: float):
+        """Return a HandFrame for EVERY detected hand (up to ``num_hands``).
+
+        Like ``process`` but does not collapse to a single selected hand — used to feed
+        the bimanual capture stream. Runs inference ONCE. Handedness labels are the raw
+        model labels (selfie-mirror convention); the caller anatomically corrects them.
+        Returns ``[]`` when nothing is detected.
+        """
+        h, w = frame_bgr.shape[:2]
+        ts_ms = self._next_timestamp_ms(wall_ts)
+        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+
+        t0 = time.perf_counter()
+        result = self._landmarker.detect_for_video(mp_image, ts_ms)
+        inference_ms = (time.perf_counter() - t0) * 1000.0
+
+        frames = []
+        if not result.hand_world_landmarks:
+            return frames
+        n = min(len(result.hand_landmarks), len(result.hand_world_landmarks))
+        for idx in range(n):
+            image_lms = result.hand_landmarks[idx]
+            world_lms = result.hand_world_landmarks[idx]
+            handed, score = "", 0.0
+            if result.handedness and idx < len(result.handedness) and result.handedness[idx]:
+                cat = result.handedness[idx][0]
+                handed, score = cat.category_name, float(cat.score)
+            landmarks = []
+            for i in range(min(len(image_lms), len(world_lms))):
+                il = image_lms[i]
+                wl = world_lms[i]
+                landmarks.append(
+                    HandLandmark(idx=i, px=il.x * w, py=il.y * h, wx=wl.x, wy=wl.y, wz=wl.z)
+                )
+            frames.append(HandFrame(True, landmarks, handed, w, h, ts_ms, inference_ms, score))
+        return frames
+
     def close(self) -> None:
         self._landmarker.close()
 
 
-def draw_overlay(frame_bgr, hand_frame: HandFrame, *, point_color=(0, 255, 0), line_color=(255, 255, 0)):
-    """Return a BGR copy with the 2D hand landmarks + bones drawn on it."""
-    out = frame_bgr.copy()
-    if not hand_frame.detected:
-        cv2.putText(out, "no hand", (12, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-        return out
+def _draw_hand(out, hand_frame: HandFrame, point_color, line_color):
+    """Draw one hand's 21 landmarks + bones onto ``out`` in place."""
     pts = {lm.idx: (int(round(lm.px)), int(round(lm.py))) for lm in hand_frame.landmarks}
     for a, b in HAND_CONNECTIONS:
         if a in pts and b in pts:
             cv2.line(out, pts[a], pts[b], line_color, 2)
     for lm in hand_frame.landmarks:
         cv2.circle(out, pts[lm.idx], 4, point_color, -1)
+
+
+def draw_overlay(frame_bgr, hand_frame: HandFrame, *, point_color=(0, 255, 0), line_color=(255, 255, 0)):
+    """Return a BGR copy with the 2D hand landmarks + bones drawn on it (single hand)."""
+    out = frame_bgr.copy()
+    if not hand_frame.detected:
+        cv2.putText(out, "no hand", (12, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+        return out
+    _draw_hand(out, hand_frame, point_color, line_color)
+    return out
+
+
+# Per-handedness colours so left/right read differently in the bimanual overlay. MediaPipe's
+# raw label is selfie-mirrored, so which physical hand gets which colour may swap — cosmetic.
+_HAND_COLORS = {
+    "Left": ((0, 255, 0), (255, 255, 0)),     # green points, cyan bones
+    "Right": ((0, 200, 255), (0, 128, 255)),  # amber points/bones
+}
+_HAND_COLORS_DEFAULT = ((0, 255, 0), (255, 255, 0))
+
+
+def draw_hands_overlay(frame_bgr, hand_frames):
+    """Return a BGR copy with EVERY detected hand drawn (the bimanual/both-hands overlay).
+
+    ``hand_frames`` is the full list of tracked hands; it may be empty or all-undetected on a
+    no-detection frame, which renders the same "no hand" label as the single-hand path."""
+    out = frame_bgr.copy()
+    drawn = 0
+    for hf in hand_frames:
+        if not hf.detected:
+            continue
+        point_color, line_color = _HAND_COLORS.get(hf.handedness, _HAND_COLORS_DEFAULT)
+        _draw_hand(out, hf, point_color, line_color)
+        drawn += 1
+    if drawn == 0:
+        cv2.putText(out, "no hand", (12, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
     return out

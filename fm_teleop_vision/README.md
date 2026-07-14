@@ -81,6 +81,9 @@ camera frame
 hand_tracker            MediaPipe Hands (21 landmarks) → a metric-ish hand pose
    │  /vision/hand_pose (PoseStamped, normalized image-width units, camera frame)
    │  /vision/grip (Float64 curl 0..1)   /vision/tracking_active (Bool)   /vision/image (debug)
+   │  /vision/<left|right>/skeleton (fm_teleop_msgs/HandSkeleton — full 21-landmark 3D+2D
+   │       hand + per-finger joint angles) and /quality (HandQuality) — the recorded
+   │       "second data stream"; set num_hands:=2 (capture_hands:=both) to publish both hands
    ▼
 mirror_source           on ENGAGE latch: hand_ref, EE pose ee_ref (from tf2), metric scale W_m
    │  every tick:  target = clamp_box( ee_ref + remap( mirror_gain · W_m · (hand_now − hand_ref) ) )
@@ -159,6 +162,15 @@ docker exec docker-fm-1 bash /ws/src/fm-teleop/fm_teleop_vision/scripts/capture_
 Each session lands in `data/teleop_captures/<timestamp>_session/`: `mirror_log.csv` (one
 time-aligned row per tick — hand, commanded target, actual EE from tf, per-axis error, joints,
 and the `dbg_*` internals), `mirror_log.jsonl`, a `bag/`, and `meta.json`.
+
+**The second data stream.** The same session also captures `hands.jsonl` — both hands' full
+skeleton per tick (21 landmarks in 3D metres + 2D pixels, per-finger joint angles, palm
+orientation, grip) — the high-value human-hand ground truth that sits on top of the raw video.
+`meta.json` carries `hand_qa`: per-hand tracking %, mean confidence, in-frame/occlusion %,
+jitter p50/p95, `both_hands_pct`, and a composite quality score + A–D grade, so a dataset
+consumer can filter to only clean episodes. For a clean raw head-camera feed (no burned-in
+overlay), launch with `camera_input:=topic` — the `fm_sensors` camera node then publishes
+`/head_cam/image_raw` and the tracker consumes exactly the frames that get recorded.
 
 **Analyze** (per-axis ranges, the empirically-measured hand→target axis mapping, servo tracking
 error, workspace clamping; writes plots):

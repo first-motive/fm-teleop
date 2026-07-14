@@ -173,6 +173,70 @@ def _clamp01(v):
     return 0.0 if v < 0.0 else (1.0 if v > 1.0 else v)
 
 
+# --- per-finger joint angles (the hand-skeleton annotation channel) -------------------
+
+# MediaPipe Hands 21-landmark finger chains, wrist-rooted: consecutive landmark indices
+# from the wrist out to each fingertip. Used to derive per-joint flexion angles.
+_FINGER_CHAINS = (
+    (0, 1, 2, 3, 4),      # thumb:  wrist, cmc, mcp, ip, tip
+    (0, 5, 6, 7, 8),      # index:  wrist, mcp, pip, dip, tip
+    (0, 9, 10, 11, 12),   # middle
+    (0, 13, 14, 15, 16),  # ring
+    (0, 17, 18, 19, 20),  # pinky
+)
+# Proximal-phalanx segment (base -> next joint) of each finger, for inter-finger
+# abduction (splay). Thumb uses mcp->ip; the four fingers use mcp->pip.
+_ABDUCTION_SEGMENTS = (
+    (2, 3),    # thumb   mcp -> ip
+    (5, 6),    # index   mcp -> pip
+    (9, 10),   # middle  mcp -> pip
+    (13, 14),  # ring    mcp -> pip
+    (17, 18),  # pinky   mcp -> pip
+)
+N_JOINT_ANGLES = 19  # 5 fingers x 3 flexion + 4 adjacent-finger abduction
+
+
+def _angle_between(u, v):
+    """Angle in radians between two 3-vectors (0..pi); 0.0 if either is degenerate."""
+    nu = _normalize(u)
+    nv = _normalize(v)
+    if nu is None or nv is None:
+        return 0.0
+    d = _dot(nu, nv)
+    d = -1.0 if d < -1.0 else (1.0 if d > 1.0 else d)
+    return math.acos(d)
+
+
+def _flexion(p_prev, p_joint, p_next):
+    """Bend at p_joint: angle between the incoming and outgoing bone (0 = straight)."""
+    return _angle_between(_sub(p_joint, p_prev), _sub(p_next, p_joint))
+
+
+def finger_joint_angles(landmarks):
+    """Per-finger articulation (radians) from the 21 world landmarks.
+
+    ``landmarks`` is any sequence indexable by MediaPipe landmark index (0..20)
+    returning an (x, y, z) world point (a list or an idx->point dict both work).
+    Returns a fixed list of ``N_JOINT_ANGLES`` floats — flexion = angle between
+    adjacent bones (0 = straight, larger = more bent) — laid out as documented on
+    fm_teleop_msgs/HandSkeleton.joint_angles:
+        0-2 thumb / 3-5 index / 6-8 middle / 9-11 ring / 12-14 pinky   (flexion)
+        15-18 abduction [thumb-index, index-middle, middle-ring, ring-pinky]
+    Degenerate points yield 0.0 for the affected angle rather than raising.
+    """
+    angles = []
+    for chain in _FINGER_CHAINS:
+        p = [landmarks[i] for i in chain]
+        # joints with both a parent and a child: chain[1], chain[2], chain[3]
+        angles.append(_flexion(p[0], p[1], p[2]))
+        angles.append(_flexion(p[1], p[2], p[3]))
+        angles.append(_flexion(p[2], p[3], p[4]))
+    dirs = [_sub(landmarks[b], landmarks[a]) for a, b in _ABDUCTION_SEGMENTS]
+    for i in range(len(dirs) - 1):
+        angles.append(_angle_between(dirs[i], dirs[i + 1]))
+    return angles
+
+
 def control_position(wrist_px, middle_mcp_px, image_w):
     """(x, y, depth) control position in normalized-image-WIDTH units from pixel landmarks.
 
