@@ -52,15 +52,19 @@
 
   /* main row */
   .main { display:flex; gap:18px; flex:1; min-height:0; }
-  /* camera pane (portrait) + 3D pane (fills) side by side, then the control column */
-  .campane { flex-shrink:0; height:100%; display:flex; align-items:center; justify-content:center; }
-  .frame { height:100%; aspect-ratio:3/4; max-width:100%; position:relative; overflow:hidden;
+  /* camera pane (landscape) + 3D pane (fills) side by side, then the control column.
+     The camera feed is landscape (Quest passthrough / webcam, 4:3); the pane matches that
+     aspect and is WIDTH-capped so the 3D arm keeps room. object-fit:contain on #feed keeps
+     the whole frame visible (never cropped) whatever the exact stream resolution is. */
+  .campane { flex:0 1 auto; min-width:0; height:100%; display:flex; align-items:center; justify-content:center; }
+  .frame { width:clamp(320px,40vw,760px); aspect-ratio:4/3; max-width:100%; max-height:100%;
+           position:relative; overflow:hidden;
            background:linear-gradient(150deg,#171320 0%,#0c0a12 60%,#0a0810 100%);
            border:1px solid rgba(236,231,216,0.1); border-radius:8px;
            box-shadow:inset 0 0 140px 20px rgba(0,0,0,0.7); }
   .viewpane { flex:1; min-width:0; position:relative; background:var(--feed-bg);
               border:1px solid rgba(236,231,216,0.1); border-radius:8px; overflow:hidden; }
-  #feed { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:none; }
+  #feed { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; display:none; }
   .scan { position:absolute; inset:0; pointer-events:none; display:none;
           background:repeating-linear-gradient(0deg,rgba(185,169,218,0.05) 0 1px,transparent 1px 3px);
           animation:fmscan 1.6s linear infinite; }
