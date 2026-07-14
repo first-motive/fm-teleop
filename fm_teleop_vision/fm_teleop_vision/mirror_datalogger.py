@@ -23,8 +23,11 @@ TWO WAYS TO DRIVE IT:
 Each session -> a timestamped dir under --base-dir containing:
     mirror_log.csv    one flat row per tick (FIXED columns; safe for pandas)
     mirror_log.jsonl  one nested JSON object per tick (full fidelity)
+    hands.jsonl       both hands' full skeleton (21 landmarks 3D+2D + joint angles) per
+                      tick — the self-describing "second data stream" for buyers
     bag/              a ros2 bag of every pipeline topic (unless --no-bag)
-    meta.json         params snapshot, topic health counts, frames, rate, duration
+    meta.json         params snapshot, topic health counts, frames, rate, duration, and
+                      hand_qa (per-hand + composite tracking-quality score/grade)
 
 Subscribes to the DATA topics BEST_EFFORT (a best-effort subscriber is QoS-
 compatible with both best-effort and reliable publishers, so we never silently get
@@ -50,6 +53,7 @@ import os
 import signal
 import subprocess
 import time
+from functools import partial
 
 import rclpy
 from rclpy.node import Node
@@ -57,6 +61,7 @@ from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
                        ReliabilityPolicy)
 from rclpy.time import Time
 
+from fm_teleop_msgs.msg import HandQuality, HandSkeleton
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, Float64, Float64MultiArray, Int8, String
@@ -98,13 +103,30 @@ ALL_FIELDS = BASE_FIELDS + JOINT_FIELDS + DBG_FIELDS
 BAG_TOPICS = [
     "/vision/hand_pose", "/vision/tracking_active", "/vision/grip", "/vision/engage",
     "/vision/image", "/vision/mirror_debug", "/target_pose",
+    # The hand-skeleton annotation stream (both hands) + a clean raw head-camera feed:
+    # the recorded "second data stream" that makes the egocentric dataset valuable.
+    "/vision/left/skeleton", "/vision/right/skeleton",
+    "/vision/left/quality", "/vision/right/quality",
+    "/head_cam/image_raw", "/head_cam/camera_info",
+    # Bimanual mirror: per-arm commanded targets (single-arm uses /target_pose above).
+    "/left/target_pose", "/right/target_pose",
     "/tf", "/tf_static", "/joint_states", "/dynamic_joint_states",
     "/openarm_right_arm_controller/joint_trajectory",
     "/openarm_right_arm_controller/controller_state",
     "/openarm_right_forward_position_controller/commands",
+    # Left-arm equivalents (present only under the default_bimanual variant; the recorder
+    # intersects with live topics, so they are harmless no-ops on the single-arm path).
+    "/openarm_left_arm_controller/joint_trajectory",
+    "/openarm_left_arm_controller/controller_state",
     "/pose_tracking_node/status", "/pose_tracking_node/delta_twist_cmds",
-    "/pose_tracking_node/delta_joint_cmds", "/gripper_teleop/right/preset", "/clock",
+    "/pose_tracking_node/delta_joint_cmds",
+    "/gripper_teleop/right/preset", "/gripper_teleop/left/preset", "/clock",
 ]
+
+# Hands whose skeleton/quality streams are recorded + scored, and the reference p95
+# jitter (metres) that maps to a zero jitter-quality term in the composite QA score.
+_HAND_LABELS = ("left", "right")
+_JITTER_REF_M = 0.01
 
 
 def _best_effort_qos(depth: int = 50) -> QoSProfile:
@@ -144,6 +166,16 @@ class MirrorDataLogger(Node):
         self._joints = {}
         self._dbg = None
 
+        # --- hand-skeleton annotation streams (both hands) ---
+        self._skel = {h: None for h in _HAND_LABELS}       # latest skeleton dict per hand
+        self._skel_t = {h: None for h in _HAND_LABELS}
+        self._qual = {h: None for h in _HAND_LABELS}        # latest quality dict per hand
+        self._qual_t = {h: None for h in _HAND_LABELS}
+        self._hands_f = None                                # hands.jsonl sidecar
+        self._qa = {}                                       # per-hand QA accumulators
+        self._qa_ticks = 0
+        self._qa_both = 0
+
         # --- session state ---
         self._active = False
         self._sess_dir = None
@@ -176,6 +208,14 @@ class MirrorDataLogger(Node):
         self.create_subscription(Int8, "/pose_tracking_node/status", self._on_status, qos)
         self.create_subscription(JointState, "/joint_states", self._on_joints, qos)
         self.create_subscription(Float64MultiArray, "/vision/mirror_debug", self._on_dbg, qos)
+        # Per-hand skeleton (full landmarks -> hands.jsonl) + quality (-> per-episode QA).
+        for _label in _HAND_LABELS:
+            self.create_subscription(
+                HandSkeleton, "/vision/%s/skeleton" % _label,
+                partial(self._on_skeleton, _label), qos)
+            self.create_subscription(
+                HandQuality, "/vision/%s/quality" % _label,
+                partial(self._on_quality, _label), qos)
 
         # Status publisher (latched so a late-joining Foxglove panel sees it).
         self._status_pub = self.create_publisher(String, "/capture/status", _latched_qos())
@@ -239,6 +279,30 @@ class MirrorDataLogger(Node):
                          for i in range(len(MIRROR_DEBUG_FIELDS))}
             self._bump("mirror_debug")
 
+    def _on_skeleton(self, label, m):
+        self._skel[label] = {
+            "hand": m.hand or label,
+            "confidence": round(float(m.confidence), 4),
+            "world": [[round(p.x, 5), round(p.y, 5), round(p.z, 5)] for p in m.world_landmarks],
+            "image": [[round(p.x, 2), round(p.y, 2)] for p in m.image_landmarks],
+            "palm_quat": [round(m.palm_orientation.w, 5), round(m.palm_orientation.x, 5),
+                          round(m.palm_orientation.y, 5), round(m.palm_orientation.z, 5)],
+            "joint_angles": [round(float(a), 5) for a in m.joint_angles],
+            "grip": round(float(m.grip), 4),
+        }
+        self._skel_t[label] = self.get_clock().now()
+        self._bump("skeleton_" + label)
+
+    def _on_quality(self, label, m):
+        self._qual[label] = {
+            "confidence": float(m.confidence),
+            "in_frame": bool(m.in_frame),
+            "jitter": float(m.jitter),
+            "detected": bool(m.detected),
+        }
+        self._qual_t[label] = self.get_clock().now()
+        self._bump("quality_" + label)
+
     def _on_control(self, m):
         if m.data and not self._active:
             self.start_session()
@@ -264,7 +328,11 @@ class MirrorDataLogger(Node):
         return (t.x, t.y, t.z, r.w, r.x, r.y, r.z)
 
     def _arm_joint_names(self):
-        return sorted(n for n in self._joints if n.startswith(self._arm_joint_prefix))
+        # Accept a comma-separated set of prefixes so a bimanual capture records BOTH arms'
+        # joints (the flat j1..jN CSV columns still take the first arm; the jsonl `joints`
+        # dict — what the data engine reads — carries every matched joint by name).
+        prefixes = tuple(p for p in (self._arm_joint_prefix or "").split(",") if p)
+        return sorted(n for n in self._joints if prefixes and n.startswith(prefixes))
 
     def _set_status(self, text):
         self.get_logger().info("[capture] %s" % text)
@@ -288,12 +356,18 @@ class MirrorDataLogger(Node):
         self._commanding_est = False
         self._hand_ref = None
         self._ee_ref = None
+        self._qa = {h: {"detected": 0, "conf_sum": 0.0, "in_frame": 0, "jitter": []}
+                    for h in _HAND_LABELS}
+        self._qa_ticks = 0
+        self._qa_both = 0
         self._t_start = time.time()
         # open outputs with the FULL fixed schema
         self._csv_f = open(os.path.join(self._sess_dir, "mirror_log.csv"), "w", newline="")
         self._writer = csv.DictWriter(self._csv_f, fieldnames=ALL_FIELDS, extrasaction="ignore")
         self._writer.writeheader()
         self._jsonl_f = open(os.path.join(self._sess_dir, "mirror_log.jsonl"), "w")
+        # hands.jsonl: the self-describing hand-skeleton sidecar (both hands per row).
+        self._hands_f = open(os.path.join(self._sess_dir, "hands.jsonl"), "w")
         # best-effort params snapshot
         try:
             with open(os.path.join(self._sess_dir, "params_mirror_source.yaml"), "w") as f:
@@ -340,16 +414,17 @@ class MirrorDataLogger(Node):
             "recorded_bag": self._record_bag,
             "msg_counts": self._counts,
             "msg_rates_hz": {k: round(v / dur, 1) for k, v in self._counts.items()} if dur > 0 else {},
+            "hand_qa": self._compute_hand_qa(),
         }
         with open(os.path.join(self._sess_dir, "meta.json"), "w") as f:
             json.dump(meta, f, indent=2)
-        for fh in (self._csv_f, self._jsonl_f):
+        for fh in (self._csv_f, self._jsonl_f, self._hands_f):
             try:
                 fh.flush()
                 fh.close()
             except Exception:
                 pass
-        self._csv_f = self._jsonl_f = self._writer = None
+        self._csv_f = self._jsonl_f = self._writer = self._hands_f = None
         self._set_status("idle (last: %s, %d rows, %.1fs%s)"
                          % (os.path.basename(self._sess_dir), self._rows, dur,
                             "" if meta["instrumented"] else ", NOT instrumented"))
@@ -431,6 +506,79 @@ class MirrorDataLogger(Node):
         if self._rows % 100 == 0:
             self._csv_f.flush()
             self._jsonl_f.flush()
+
+        # --- hand-skeleton sidecar + per-episode QA accumulation (resampled at --rate,
+        # so the percentages align with engage/tracking above). A hand counts as present
+        # this tick only if its stream is fresh (age <= hand_timeout). ---
+        self._qa_ticks += 1
+        present = {}
+        for label in _HAND_LABELS:
+            q = self._qual[label]
+            q_age = self._age(self._qual_t[label])
+            fresh = (q is not None and q["detected"]
+                     and q_age is not None and q_age <= self._hand_timeout)
+            present[label] = fresh
+            if fresh:
+                st = self._qa[label]
+                st["detected"] += 1
+                st["conf_sum"] += q["confidence"]
+                if q["in_frame"]:
+                    st["in_frame"] += 1
+                st["jitter"].append(q["jitter"])
+        if present["left"] and present["right"]:
+            self._qa_both += 1
+        if self._hands_f is not None:
+            hrow = {"t_wall": round(time.time(), 4), "t_ros": round(now.nanoseconds * 1e-9, 4)}
+            any_hand = False
+            for label in _HAND_LABELS:
+                s_age = self._age(self._skel_t[label])
+                s_fresh = (self._skel[label] is not None
+                           and s_age is not None and s_age <= self._hand_timeout)
+                hrow[label] = dict(self._skel[label], age=round(s_age, 4)) if s_fresh else None
+                any_hand = any_hand or s_fresh
+            if any_hand:                    # skip empty rows when no hand is tracked
+                self._hands_f.write(json.dumps(hrow) + "\n")
+
+    def _compute_hand_qa(self):
+        """Per-episode hand-tracking quality — the marketable QA layer. Scores each hand on
+        presence, confidence, in-frame %, and jitter, then a composite score/grade over the
+        hands that actually appeared. Percentages are over sampled ticks (align with
+        tracking_pct). Empty accumulators (older sessions, no hand streams) yield zeros."""
+        ticks = max(1, self._qa_ticks)
+        qa = {"ticks": self._qa_ticks,
+              "both_hands_pct": round(self._qa_both * 100.0 / ticks, 1),
+              "hands": {}}
+        scores = []
+        empty = {"detected": 0, "conf_sum": 0.0, "in_frame": 0, "jitter": []}
+        for label in _HAND_LABELS:
+            st = self._qa.get(label) or empty
+            det = st["detected"]
+            tracking = det / ticks
+            mean_conf = (st["conf_sum"] / det) if det else 0.0
+            in_frame = (st["in_frame"] / det) if det else 0.0
+            js = sorted(st["jitter"])
+            jp50 = js[min(len(js) - 1, len(js) // 2)] if js else 0.0
+            jp95 = js[min(len(js) - 1, int(0.95 * len(js)))] if js else 0.0
+            jitter_penalty = min(1.0, jp95 / _JITTER_REF_M) if _JITTER_REF_M > 0 else 0.0
+            score = (0.40 * tracking + 0.30 * mean_conf
+                     + 0.20 * in_frame + 0.10 * (1.0 - jitter_penalty))
+            qa["hands"][label] = {
+                "present": det > 0,
+                "tracking_pct": round(tracking * 100.0, 1),
+                "mean_confidence": round(mean_conf, 3),
+                "in_frame_pct": round(in_frame * 100.0, 1),
+                "occlusion_pct": round((1.0 - in_frame) * 100.0, 1) if det else 0.0,
+                "jitter_p50": round(jp50, 5),
+                "jitter_p95": round(jp95, 5),
+                "score": round(score, 3),
+            }
+            if det:
+                scores.append(score)
+        overall = (sum(scores) / len(scores)) if scores else 0.0
+        qa["score"] = round(overall, 3)
+        qa["grade"] = ("A" if overall >= 0.85 else "B" if overall >= 0.70
+                       else "C" if overall >= 0.50 else "D")
+        return qa
 
     def shutdown(self):
         if self._active:

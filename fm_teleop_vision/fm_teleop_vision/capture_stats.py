@@ -79,6 +79,9 @@ def summarize(rows, meta=None, ws_min=None, ws_max=None):
         "instrumented": meta.get("instrumented"),
         "recorded_bag": meta.get("recorded_bag"),
         "msg_rates_hz": meta.get("msg_rates_hz", {}),
+        # Hand-tracking QA (the second data stream's quality layer), computed live by
+        # mirror_datalogger and carried through meta.json — None for older sessions.
+        "hand_qa": meta.get("hand_qa"),
     }
     if not rows:
         return out
@@ -154,6 +157,7 @@ def series(rows, cols=None, n=400):
 def light_summary(rows, meta=None):
     """Cheap subset for the /capture/index list cards."""
     s = summarize(rows, meta)
+    qa = s.get("hand_qa") or {}
     return {
         "rows": s.get("rows"),
         "duration_s": s.get("duration_s"),
@@ -164,4 +168,7 @@ def light_summary(rows, meta=None):
         "err_p50": s.get("err_dist", {}).get("p50"),
         "err_p95": s.get("err_dist", {}).get("p95"),
         "servo_ok_pct": s.get("servo_ok_pct"),
+        "hand_qa_score": qa.get("score"),
+        "hand_qa_grade": qa.get("grade"),
+        "both_hands_pct": qa.get("both_hands_pct"),
     }

@@ -41,6 +41,9 @@ setup(
             "arm_reset = fm_teleop_vision.arm_reset:main",
             # Serves recorded sessions (index/detail) to the web GUI's recordings viewer.
             "capture_browser = fm_teleop_vision.capture_browser:main",
+            # Data engine (offline, ROS-free): a captured session -> a training-ready episode
+            # (human hand skeletons joined to the robot trajectory on the shared tick clock).
+            "export_episode = fm_teleop_vision.export_episode:main",
         ],
     },
 )
