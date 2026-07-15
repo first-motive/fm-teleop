@@ -39,11 +39,11 @@ import threading
 import time
 
 from ament_index_python.packages import get_package_share_directory
-from geometry_msgs.msg import Point, PoseStamped, Quaternion
+from geometry_msgs.msg import Point, PointStamped, PoseStamped, Quaternion
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import CompressedImage, Image
+from sensor_msgs.msg import CameraInfo, CompressedImage, Image
 from std_msgs.msg import Bool, Float64
 
 from fm_teleop_msgs.msg import HandQuality, HandSkeleton
@@ -112,7 +112,7 @@ class _TopicFrameSource:
 
 
 class _Sample:
-    __slots__ = ("detected", "pos", "quat", "curl", "wall_ts", "jpeg")
+    __slots__ = ("detected", "pos", "quat", "curl", "wall_ts", "jpeg", "metric_pt")
 
     def __init__(self):
         self.detected = False
@@ -121,6 +121,7 @@ class _Sample:
         self.curl = 0.0
         self.wall_ts = 0.0
         self.jpeg = None
+        self.metric_pt = None          # (X, Y, Z) metres in the camera frame, from depth (or None)
 
 
 class _HandSample:
@@ -161,6 +162,18 @@ class HandTracker(Node):
         # the frames recorded, and the same tracker will run on head + wrist cameras.
         self.declare_parameter("input_mode", "device")            # device | topic
         self.declare_parameter("input_image_topic", "head_cam/image_raw")
+        # --- metric depth (RealSense on a Linux camera host) ---
+        # When use_depth is true (topic mode), subscribe to the ALIGNED depth image + its
+        # camera_info and deproject the tracked wrist pixel to a real metric 3D point in the
+        # camera frame (metres): Z = depth(u,v), X = (u-cx)*Z/fx, Y = (v-cy)*Z/fy. Published
+        # additively on hand_point_topic (geometry_msgs/PointStamped) — it does NOT change the
+        # existing apparent-size control path, so nothing downstream breaks. Requires the depth
+        # to be pixel-aligned to the color frame and rotate_deg=0 (camera mounted upright).
+        self.declare_parameter("use_depth", False)
+        self.declare_parameter("depth_topic", "head_cam/depth/image_rect_raw")
+        self.declare_parameter("depth_info_topic", "head_cam/depth/camera_info")
+        self.declare_parameter("depth_scale", 0.001)   # 16UC1 millimetres -> metres
+        self.declare_parameter("hand_point_topic", "vision/hand_point")
         # hand: MediaPipe Hand Landmarker (21 landmarks, one hand; grip from finger curl).
         # full_body: MediaPipe Pose Landmarker (33 body joints); the operator's body_side
         # wrist drives control and the elbow->wrist FOREARM is the apparent-size depth
@@ -226,6 +239,16 @@ class HandTracker(Node):
         self._skeleton_ns = str(gp("skeleton_topic_ns").value).rstrip("/")
         self._input_mode = str(gp("input_mode").value).lower()
         self._in_stamp = None                              # latest camera-frame stamp (topic mode)
+        self._use_depth = bool(gp("use_depth").value)
+        self._depth_scale = float(gp("depth_scale").value)
+        self._depth_frame = None                           # latest aligned depth (np uint16), under _depth_lock
+        self._intr = None                                  # (fx, fy, cx, cy) from depth camera_info
+        self._depth_lock = threading.Lock()
+        if self._use_depth and self._rotate is not None:
+            self.get_logger().warning(
+                "use_depth with rotate_deg!=0 is unsupported (depth<->landmark pixels would "
+                "misalign); disabling depth. Mount the camera upright and set rotate_deg:=0.")
+            self._use_depth = False
 
         # --- publishers ---
         self._pose_pub = self.create_publisher(PoseStamped, gp("hand_pose_topic").value, qos_profile_sensor_data)
@@ -234,6 +257,12 @@ class HandTracker(Node):
         self._image_pub = (
             self.create_publisher(CompressedImage, gp("image_topic").value, qos_profile_sensor_data)
             if self._debug else None
+        )
+        # Metric wrist point (camera frame, metres) deprojected from the aligned depth — the
+        # real Z the RealSense provides, published additively alongside the control stream.
+        self._point_pub = (
+            self.create_publisher(PointStamped, gp("hand_point_topic").value, qos_profile_sensor_data)
+            if self._use_depth else None
         )
         # Per-hand annotation publishers (skeleton + quality), one pair each for "left"
         # and "right". The control publishers above are untouched; these are the recorded
@@ -277,6 +306,11 @@ class HandTracker(Node):
             self._topic_source = _TopicFrameSource()
             self.create_subscription(
                 Image, gp("input_image_topic").value, self._on_image, qos_profile_sensor_data)
+            if self._use_depth:
+                self.create_subscription(
+                    Image, gp("depth_topic").value, self._on_depth, qos_profile_sensor_data)
+                self.create_subscription(
+                    CameraInfo, gp("depth_info_topic").value, self._on_caminfo, qos_profile_sensor_data)
 
         self._worker = threading.Thread(target=self._run, name="hand_tracker_worker", daemon=True)
         self._worker.start()
@@ -379,6 +413,57 @@ class HandTracker(Node):
         if self._topic_source is not None:
             self._topic_source.push(bgr, wall_ts)
 
+    def _on_depth(self, msg):
+        """Topic input: cache the latest ALIGNED depth frame for metric wrist deprojection."""
+        import numpy as np
+        h, w = msg.height, msg.width
+        enc = (msg.encoding or "16UC1").lower()
+        try:
+            if enc in ("16uc1", "mono16"):
+                arr = np.frombuffer(bytes(msg.data), dtype=np.uint16).reshape(h, w)
+            elif enc == "32fc1":
+                arr = np.frombuffer(bytes(msg.data), dtype=np.float32).reshape(h, w)
+            else:
+                self.get_logger().warn("unsupported depth encoding %r" % enc,
+                                       throttle_duration_sec=5.0)
+                return
+        except Exception as e:  # noqa: BLE001 — bad frame; keep the node alive
+            self.get_logger().warn("depth convert failed: %r" % e, throttle_duration_sec=5.0)
+            return
+        with self._depth_lock:
+            self._depth_frame = arr
+
+    def _on_caminfo(self, msg):
+        """Cache the depth camera intrinsics (K = [fx 0 cx; 0 fy cy; 0 0 1])."""
+        k = msg.k
+        with self._depth_lock:
+            self._intr = (float(k[0]), float(k[4]), float(k[2]), float(k[5]))
+
+    def _metric_point(self, px, py):
+        """Deproject pixel (px, py) to a metric (X, Y, Z) camera-frame point in metres using the
+        latest aligned depth + intrinsics, or None if unavailable/invalid. Uses a small-window
+        median (ignoring 0 = no depth return) to tolerate holes, and rejects out-of-range depth."""
+        with self._depth_lock:
+            depth = self._depth_frame
+            intr = self._intr
+        if depth is None or intr is None:
+            return None
+        import numpy as np
+        h, w = depth.shape[:2]
+        u, v = int(round(px)), int(round(py))
+        if not (0 <= u < w and 0 <= v < h):
+            return None
+        r = 3
+        win = depth[max(0, v - r):v + r + 1, max(0, u - r):u + r + 1]
+        vals = win[win > 0]
+        if vals.size == 0:
+            return None
+        z = float(np.median(vals)) * self._depth_scale
+        if not (0.0 < z < 20.0):        # metres; reject 0 / absurd returns
+            return None
+        fx, fy, cx, cy = intr
+        return ((u - cx) * z / fx, (v - cy) * z / fy, z)
+
     def _store(self, hf, frame_bgr, dt, pos_filt, overlay_frames=None):
         s = _Sample()
         s.wall_ts = time.time()
@@ -402,6 +487,9 @@ class HandTracker(Node):
                 pos = tuple(pos_filt[i](pos[i], dt) for i in range(3))
             s.pos = pos
             s.detected = True
+            if self._use_depth:
+                # Real metric wrist point from the aligned depth (metres, camera frame).
+                s.metric_pt = self._metric_point(*img[hand_mod.WRIST])
         if self._debug:
             # In hand mode _store_hands passes every tracked hand so the overlay shows BOTH
             # (bimanual) — not just the control hand. overlay_frames=None keeps the single-hand
@@ -620,6 +708,11 @@ class HandTracker(Node):
         msg.pose.orientation.z = qz
         self._pose_pub.publish(msg)
         self._grip_pub.publish(Float64(data=float(s.curl)))
+        if self._point_pub is not None and s.metric_pt is not None:
+            pt = PointStamped()
+            pt.header = msg.header
+            pt.point.x, pt.point.y, pt.point.z = (float(c) for c in s.metric_pt)
+            self._point_pub.publish(pt)
         if self._image_pub is not None and s.jpeg is not None:
             img = CompressedImage()
             img.header = msg.header
