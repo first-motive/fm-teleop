@@ -37,7 +37,7 @@ Publishes:
     hand_preset (String)          -> gripper_teleop  [contract, optional]
 """
 
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PointStamped, PoseStamped
 from rcl_interfaces.msg import SetParametersResult
 import rclpy
 from rclpy.qos import qos_profile_sensor_data
@@ -48,6 +48,10 @@ import tf2_ros
 from fm_teleop_core import retarget  # noqa: F401  (kept on the path; mapping reuses it)
 from fm_teleop_core.source import TeleopSource
 from fm_teleop_vision import mapping
+
+# Identity orientation for the metric (PointStamped) input, which carries no orientation: the
+# target orientation is always held from the EE pose latched at engage, so this is never read.
+_IDENTITY_QUAT = (1.0, 0.0, 0.0, 0.0)
 
 
 class MirrorSource(TeleopSource):
@@ -130,6 +134,16 @@ class MirrorSource(TeleopSource):
         self.declare_parameter("tracking_topic", "vision/tracking_active")
         self.declare_parameter("engage_topic", "vision/engage")
 
+        # input_mode selects the hand source. "image" (default): the mono hand_pose_topic
+        # (normalized-image units -> metres via the apparent-size W_m latched at engage).
+        # "metric": the rig's hand_point_topic (geometry_msgs/PointStamped — real metres from
+        # the RealSense depth deproject) drives the mirror DIRECTLY in metres, no W_m proxy, so
+        # depth-Z is true camera depth. Enable the depth axis (axis_gain[2] != 0); the metric
+        # axis_map signs are camera-optical-frame specific (Z is forward/away from the camera)
+        # and hardware-tuned. input_mode is fixed at startup (it selects the subscription).
+        self.declare_parameter("input_mode", "image")
+        self.declare_parameter("hand_point_topic", "vision/hand_point")
+
         gp = self.get_parameter
         self._frame = gp("command_frame").value
         self._ee_frame = gp("ee_frame").value
@@ -147,6 +161,7 @@ class MirrorSource(TeleopSource):
         self._enable_grip = bool(gp("enable_grip").value)
         self._grip_open_below = float(gp("grip_open_below").value)
         self._grip_close_above = float(gp("grip_close_above").value)
+        self._input_mode = str(gp("input_mode").value).strip().lower()
 
         # --- publishers (from the contract; never hard-coded types/topics) ---
         # PoseTracking subscribes target_pose with SystemDefaultsQoS (RELIABLE), so the default
@@ -187,8 +202,16 @@ class MirrorSource(TeleopSource):
         self._warned_tf = False
 
         # hand_tracker publishes the pose/grip/tracking stream BEST_EFFORT
-        # (qos_profile_sensor_data); subscribe with the same so the QoS is compatible.
-        self.create_subscription(PoseStamped, gp("hand_pose_topic").value, self._on_pose, qos_profile_sensor_data)
+        # (qos_profile_sensor_data); subscribe with the same so the QoS is compatible. Metric mode
+        # subscribes the rig's PointStamped depth point instead of the mono PoseStamped.
+        if self._input_mode == "metric":
+            self.create_subscription(
+                PointStamped, gp("hand_point_topic").value, self._on_point, qos_profile_sensor_data
+            )
+        else:
+            self.create_subscription(
+                PoseStamped, gp("hand_pose_topic").value, self._on_pose, qos_profile_sensor_data
+            )
         self.create_subscription(Float64, gp("grip_topic").value, self._on_grip, qos_profile_sensor_data)
         self.create_subscription(Bool, gp("tracking_topic").value, self._on_tracking, qos_profile_sensor_data)
         # engage is a UI toggle — keep it RELIABLE so a press is never dropped.
@@ -242,6 +265,13 @@ class MirrorSource(TeleopSource):
         self._pose = ((p.x, p.y, p.z), (o.w, o.x, o.y, o.z))
         self._pose_t = self.get_clock().now()
 
+    def _on_point(self, msg):
+        # Metric depth point (PointStamped) — already metres in the camera frame. Orientation is
+        # unused (the target holds the EE orientation latched at engage), so stamp identity.
+        p = msg.point
+        self._pose = ((p.x, p.y, p.z), _IDENTITY_QUAT)
+        self._pose_t = self.get_clock().now()
+
     def _on_grip(self, msg):
         self._curl = float(msg.data)
 
@@ -257,6 +287,25 @@ class MirrorSource(TeleopSource):
             return False
         age = (self.get_clock().now() - self._pose_t).nanoseconds * 1e-9
         return age <= self._timeout
+
+    def _scale(self):
+        """Per-input-axis scale triple for the current input mode.
+
+        metric: the hand point is already metres, so the scale is the UNITLESS
+        ``mirror_gain * axis_gain`` (a plain multiplier on real hand travel). image: the
+        W_m-based ``metric_scale`` that converts normalized-image units into metres.
+        """
+        if self._input_mode == "metric":
+            ag = self._axis_gain
+            return (
+                self._mirror_gain * ag[0],
+                self._mirror_gain * ag[1],
+                self._mirror_gain * ag[2],
+            )
+        return mapping.metric_scale(
+            self._w_m, mirror_gain=self._mirror_gain,
+            axis_gain=self._axis_gain, fallback_scale=self._fallback_scale,
+        )
 
     def _lookup_ee(self):
         """Latest EE pose ((x,y,z),(w,x,y,z)) in the command frame, or None if tf not ready.
@@ -364,25 +413,31 @@ class MirrorSource(TeleopSource):
                 return
             self._ee_ref_pos, self._ee_ref_quat = ee
             self._hand_ref = hand_now
-            self._w_m = mapping.image_width_m(hand_now[2], hand_span_m=self._hand_span_m)
             self._commanding = True
-            if self._w_m is None:
-                self.get_logger().warn(
-                    "engaged; ee_ref=(%.3f, %.3f, %.3f) but hand size degenerate (z=%.4f)"
-                    " -> fallback_scale=%.2f m per image width"
-                    % (self._ee_ref_pos + (hand_now[2], self._fallback_scale))
+            if self._input_mode == "metric":
+                # hand_point is already metres — no apparent-size W_m proxy to latch.
+                self._w_m = None
+                self.get_logger().info(
+                    "engaged (metric depth-Z); ee_ref=(%.3f, %.3f, %.3f);"
+                    " hand_ref=(%.3f, %.3f, %.3f) m"
+                    % (self._ee_ref_pos + self._hand_ref)
                 )
             else:
-                self.get_logger().info(
-                    "engaged; ee_ref=(%.3f, %.3f, %.3f); image width ~= %.2f m at hand"
-                    " (z=%.3f) -> %.2f m EE per image width"
-                    % (self._ee_ref_pos + (self._w_m, hand_now[2], self._mirror_gain * self._w_m))
-                )
+                self._w_m = mapping.image_width_m(hand_now[2], hand_span_m=self._hand_span_m)
+                if self._w_m is None:
+                    self.get_logger().warn(
+                        "engaged; ee_ref=(%.3f, %.3f, %.3f) but hand size degenerate (z=%.4f)"
+                        " -> fallback_scale=%.2f m per image width"
+                        % (self._ee_ref_pos + (hand_now[2], self._fallback_scale))
+                    )
+                else:
+                    self.get_logger().info(
+                        "engaged; ee_ref=(%.3f, %.3f, %.3f); image width ~= %.2f m at hand"
+                        " (z=%.3f) -> %.2f m EE per image width"
+                        % (self._ee_ref_pos + (self._w_m, hand_now[2], self._mirror_gain * self._w_m))
+                    )
             if self._publish_debug:
-                scale0 = mapping.metric_scale(
-                    self._w_m, mirror_gain=self._mirror_gain,
-                    axis_gain=self._axis_gain, fallback_scale=self._fallback_scale,
-                )
+                scale0 = self._scale()
                 self._publish_debug_msg(
                     self._w_m, self._hand_ref, self._ee_ref_pos, scale0,
                     (0.0, 0.0, 0.0), self._ee_ref_pos, self._ee_ref_pos, (0.0, 0.0, 0.0),
@@ -391,14 +446,21 @@ class MirrorSource(TeleopSource):
             self._publish_target(self._ee_ref_pos)   # zero-delta target -> hold, no jump
             return
 
-        scale = mapping.metric_scale(
-            self._w_m, mirror_gain=self._mirror_gain,
-            axis_gain=self._axis_gain, fallback_scale=self._fallback_scale,
-        )
-        target, overflow = mapping.metric_mirror_target(
-            self._ee_ref_pos, self._hand_ref, hand_now, self._lin_map,
-            scale=scale, hand_span_m=self._hand_span_m, workspace_box=self._ws_box,
-        )
+        scale = self._scale()
+        if self._input_mode == "metric":
+            # hand_point deltas are already metres — map directly (no W_m / depth-size proxy).
+            # Clamp separately (infinite box in the map, then box_clamp) so overflow stays
+            # observable for the saturation warning below.
+            raw = mapping.mirror_target(
+                self._ee_ref_pos, self._hand_ref, hand_now, self._lin_map,
+                scale=scale, workspace_box=mapping._NO_BOX,
+            )
+            target, overflow = mapping.box_clamp(raw, self._ws_box)
+        else:
+            target, overflow = mapping.metric_mirror_target(
+                self._ee_ref_pos, self._hand_ref, hand_now, self._lin_map,
+                scale=scale, hand_span_m=self._hand_span_m, workspace_box=self._ws_box,
+            )
         if any(abs(o) > 1e-9 for o in overflow):
             # The box silently eating motion reads as "the arm barely moves" — say so.
             self.get_logger().warn(
