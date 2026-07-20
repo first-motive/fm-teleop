@@ -275,12 +275,23 @@ class HandTracker(Node):
         self._hpose_pubs = None
         self._hgrip_pubs = None
         self._hactive_pubs = None
+        # Per-hand metric depth points — created only with use_depth, so a per-arm
+        # bimanual mirror_source can drive each arm from its own hand's real RealSense
+        # Z (left hand -> left arm, right hand -> right arm). Mirrors the single
+        # /vision/hand_point stream, one per hand.
+        self._hpoint_pubs = None
         if self._publish_skeleton and self._mode == "hand":
             self._skel_pubs, self._qual_pubs = {}, {}
             self._hpose_pubs, self._hgrip_pubs, self._hactive_pubs = {}, {}, {}
+            if self._use_depth:
+                self._hpoint_pubs = {}
             for _label in ("left", "right"):
                 self._hactive_pubs[_label] = self.create_publisher(
                     Bool, "%s/%s/tracking_active" % (self._skeleton_ns, _label), 10)
+                if self._hpoint_pubs is not None:
+                    self._hpoint_pubs[_label] = self.create_publisher(
+                        PointStamped, "%s/%s/hand_point" % (self._skeleton_ns, _label),
+                        qos_profile_sensor_data)
                 self._skel_pubs[_label] = self.create_publisher(
                     HandSkeleton, "%s/%s/skeleton" % (self._skeleton_ns, _label),
                     qos_profile_sensor_data)
@@ -774,6 +785,17 @@ class HandTracker(Node):
             pose.pose.orientation.z = float(qz)
             self._hpose_pubs[label].publish(pose)
             self._hgrip_pubs[label].publish(Float64(data=float(hs.curl)))
+
+            # Per-hand metric depth point: deproject THIS hand's wrist pixel against the
+            # aligned depth, so bimanual gets real RealSense Z on both arms.
+            if self._hpoint_pubs is not None and hs.image_lms is not None:
+                mp = self._metric_point(*hs.image_lms[hand_mod.WRIST])
+                if mp is not None:
+                    pt = PointStamped()
+                    pt.header.stamp = now
+                    pt.header.frame_id = self._frame
+                    pt.point.x, pt.point.y, pt.point.z = mp
+                    self._hpoint_pubs[label].publish(pt)
 
     def destroy_node(self):
         self._stop.set()
