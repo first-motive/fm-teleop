@@ -6,6 +6,11 @@ on:
     paths-ignore: ["docs/**", "LICENSE", ".gitignore", "plans/**"]
   pull_request:
     paths-ignore: ["docs/**", "LICENSE", ".gitignore", "plans/**"]
+  # Re-run on demand. A workflow that fails to load — a reusable workflow this one
+  # calls not existing yet, say — produces a run GitHub refuses to retry, and an
+  # empty commit cannot retrigger it either (paths-ignore skips a push that touched
+  # no file). Without this, recovering needs a throwaway code change.
+  workflow_dispatch:
 
 # Standalone build: clone this repo, pull its .repos siblings + externals, then
 # colcon build + test in a Humble container. Proves the package stands on its own
