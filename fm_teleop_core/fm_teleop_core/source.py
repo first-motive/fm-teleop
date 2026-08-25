@@ -22,8 +22,10 @@ from fm_teleop_core import contract
 class TeleopSource(Node):
     """Base node binding a teleop source to the shared command contract."""
 
-    def __init__(self, node_name):
-        super().__init__(node_name)
+    def __init__(self, node_name, **kwargs):
+        # kwargs reach rclpy's Node untouched — a test constructs a source with
+        # ``parameter_overrides`` instead of a launch file.
+        super().__init__(node_name, **kwargs)
 
     def contract_publisher(self, channel, topic=None, qos=10):
         """Create a publisher for a contract channel.

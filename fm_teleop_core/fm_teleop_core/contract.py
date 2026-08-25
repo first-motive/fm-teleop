@@ -13,8 +13,11 @@ sinks in ``fm_control`` (Servo, the controllers, the hardware bridges) consume t
 
 This module is the single source of truth for that set: each channel's message type
 and default topic. ``TeleopSource`` builds its publishers from it, so adding or moving
-a channel is a one-line edit here, not a hunt across every source. No custom interface
-package (``fm_teleop_msgs``) exists by design — the contract is standard messages only.
+a channel is a one-line edit here, not a hunt across every source. Command channels
+carry standard messages only by design, so any ROS tool can inspect them and there is
+no command interface to version. Perception *outputs* are the exception: the tracked
+hand streams in ``fm_teleop_msgs`` (``HandSkeleton``, ``HandQuality``) are observations
+feeding the recorder and the mirror path, never a command channel in this contract.
 """
 
 from dataclasses import dataclass

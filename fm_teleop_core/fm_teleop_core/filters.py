@@ -1,14 +1,16 @@
 """One-Euro filter (Casiez et al., 2012) — pure scalar smoothing, no ROS, no OpenCV.
 
-The vision source tracks a wrist's world position; MediaPipe's per-frame estimate is
-noisy, and feeding that jitter straight into a velocity command makes the arm buzz at
-rest. A One-Euro filter is the standard low-lag answer: it smooths hard when the signal
-is still and loosens as motion speeds up, so it kills rest-jitter without adding lag to a
-deliberate reach.
+Any tracked signal arrives noisy, and feeding that jitter straight into a command makes
+the arm buzz at rest. A One-Euro filter is the standard low-lag answer: it smooths hard
+when the signal is still and loosens as motion speeds up, so it kills rest-jitter without
+adding lag to a deliberate reach.
 
-Reference: https://gery.casiez.net/1euro/. ``Vec3OneEuro`` wraps three independent
-scalar filters for the wrist's (x, y, z); this module imports nothing heavy so it is
-unit-tested on the host without a ROS graph, a camera, or the pose model.
+It lives beside ``retarget`` in the contract package for the same reason that does: it is
+pure math with no ROS, no camera, and no model, and both sides of the vision pipeline need
+it — the tracker to smooth a hand skeleton, the teleop source to smooth a wrist.
+
+Reference: https://gery.casiez.net/1euro/. ``Vec3OneEuro`` wraps three independent scalar
+filters for a tracked point's (x, y, z); ``SkeletonFilter`` does the same per landmark.
 """
 
 import math

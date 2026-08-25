@@ -9,7 +9,7 @@ Two independent inputs live here; pick one with `input:=` on the launch:
 
 | `input:=` | Node(s) | Control model | Channel |
 |-----------|---------|---------------|---------|
-| **`mirror`** *(current focus)* | `hand_tracker` + `mirror_source` | **1:1 absolute hand-pose mirroring** ("mouse pickup"): the EE holds an absolute target that tracks your hand metre-for-metre | `arm_pose_target` → `/target_pose` |
+| **`mirror`** *(current focus)* | `fm_data_perception/hand_tracker` + `mirror_source` | **1:1 absolute hand-pose mirroring** ("mouse pickup"): the EE holds an absolute target that tracks your hand metre-for-metre | `arm_pose_target` → `/target_pose` |
 | `vision` | `vision_source` | Wrist **velocity jog**: holding the wrist off a neutral pose jogs the arm | `arm_twist` → Servo twist |
 
 This README is written to get a new person **running the `mirror` path end-to-end**; the
@@ -79,6 +79,8 @@ camera frame
    │  cv2.VideoCapture (webcam index or MJPEG/RTSP URL)
    ▼
 hand_tracker            MediaPipe Hands (21 landmarks) → a metric-ish hand pose
+   │  (fm_data_perception, in fm-data: it runs on the capture rig, so a teleop
+   │   refactor cannot break recording)
    │  /vision/hand_pose (PoseStamped, normalized image-width units, camera frame)
    │  /vision/grip (Float64 curl 0..1)   /vision/tracking_active (Bool)   /vision/image (debug)
    │  /vision/<left|right>/skeleton (fm_teleop_msgs/HandSkeleton — full 21-landmark 3D+2D
@@ -242,12 +244,18 @@ against the live sim, then persist in `vision.yaml`.
 colcon test --packages-select fm_teleop_vision
 colcon test-result --verbose
 ```
-The math (`mapping.py`) and filters are pure Python and tested without a camera or a ROS graph;
+The math (`mapping.py`, and the filters in `fm_teleop_core`) is pure Python and tested
+without a camera or a ROS graph;
 the node smoke tests inject fakes.
 
 ## Build & deps
 
 `ament_python`. Runtime needs `mediapipe` + `opencv-python` (pip-only, no rosdep key — installed
-into the image / container). Console scripts: `hand_tracker`, `mirror_source`, `vision_source`
-(see `setup.py`). MediaPipe models (`hand_landmarker.task`, `pose_landmarker_heavy.task`) are
-fetched by `scripts/download_model.sh` into `models/` (gitignored, ~30 MB).
+into the image / container). Console scripts: `mirror_source`, `vision_source`, `arm_reset`,
+`mirror_datalogger`, `capture_browser`, `export_episode` (see `setup.py`). The pose model
+(`pose_landmarker_heavy.task`) is fetched by `scripts/download_model.sh` into `models/`
+(gitignored).
+
+The `hand_tracker` that feeds the `mirror` path is **not** in this package: it runs on the
+capture rig and lives in `fm_data_perception` (fm-data), with its own model download. This
+package consumes its `fm_teleop_msgs/HandSkeleton` output over the graph.

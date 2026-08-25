@@ -18,12 +18,13 @@ setup(
     zip_safe=True,
     maintainer="First Motive",
     maintainer_email="nish@ubundi.co.za",
-    description="Teleop source skeleton: leader-arm follow",
+    description="Teleop source: leader-arm follow (leader joints -> follower controller)",
     license="Apache-2.0",
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
             "leader_source = fm_teleop_leader.leader_source:main",
+            "leader_driver = fm_teleop_leader.leader_driver:main",
         ],
     },
 )

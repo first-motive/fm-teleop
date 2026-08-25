@@ -4,7 +4,7 @@ import math
 
 import pytest
 
-from fm_teleop_vision.filters import OneEuroFilter, Vec3OneEuro
+from fm_teleop_core.filters import OneEuroFilter, Vec3OneEuro
 
 
 def _stddev(values):

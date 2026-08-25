@@ -1,16 +1,14 @@
-"""Smoke test: skeleton imports, and instantiating raises a clear NotImplementedError."""
+"""Smoke test: every module in the package imports without hardware or a bus."""
 
 import importlib
 
 import pytest
 
 
-def test_import_module():
-    importlib.import_module("fm_teleop_leader.leader_source")
-
-
-def test_instantiation_raises_not_implemented():
-    from fm_teleop_leader.leader_source import LeaderSource
-
-    with pytest.raises(NotImplementedError):
-        LeaderSource()
+@pytest.mark.parametrize(
+    "module",
+    ["fm_teleop_leader.follow", "fm_teleop_leader.sts3215",
+     "fm_teleop_leader.leader_source", "fm_teleop_leader.leader_driver"],
+)
+def test_import_module(module):
+    importlib.import_module(module)

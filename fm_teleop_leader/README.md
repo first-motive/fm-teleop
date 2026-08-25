@@ -1,10 +1,9 @@
 # fm_teleop_leader
 
-Teleop source skeleton: **leader-arm follow**. A physical leader arm whose joint states
-drive the follower directly. Buildable and importable today; the node body is one session
-of work away.
+Teleop source: **leader-arm follow**. A physical leader arm whose joint states drive the
+follower directly.
 
-## Planned Mapping
+## Mapping
 
 ```
 leader /joint_states  ->  arm_trajectory (JointTrajectory)  ->  follower arm controller
@@ -14,13 +13,50 @@ This is the contract's **leader-bypass** path: the leader's joints already form 
 pose stream, so the source republishes them straight to the follower's arm controller,
 skipping MoveIt Servo (which exists to turn Cartesian/joint *deltas* into safe motion).
 
-## Status
+## Nodes
 
-Skeleton. `LeaderSource.__init__` raises `NotImplementedError`; running
-`ros2 run fm_teleop_leader leader_source` fails with a clear message. To implement:
-subscribe to the leader's `sensor_msgs/JointState`, map each sample to a single-point
-`JointTrajectory`, and publish via `self.contract_publisher("arm_trajectory",
-topic=<follower controller>)`.
+| Node | Role |
+|------|------|
+| `leader_source` | leader `JointState` -> single-point `JointTrajectory` on the follower's controller |
+| `leader_driver` | SO-101 leader arm's Feetech bus -> leader `JointState` (hardware only) |
+
+```
+leader_driver ---> /leader/joint_states ---> leader_source ---> <arm>_controller/joint_trajectory
+   (hardware)         (or any publisher, in sim)                    (follower)
+```
+
+`leader_source` needs the follower's controller identity — `joints` in controller order
+and `command_topic`. `teleop.launch.py` reads both from the `fm_bringup` robot registry,
+so an operator selecting Leader-Follower types neither.
+
+### Safety
+
+Servo is bypassed, so this source owns the bounds nothing downstream provides:
+
+- **Deadman** on `~/enable` (`std_msgs/Bool`). The rising edge seeds the ramp from the
+  follower's *current* joint state, so engaging with the arms far apart ramps rather
+  than jumps. Releasing stops commanding; the controller holds its last point.
+- **`max_joint_step`** caps radians of travel per published point.
+- **`sample_timeout`** stops commanding when the leader stream goes quiet, and re-seeds
+  on its return.
+- The zenoh bridge denies `*_controller/joint_trajectory` between machines, so the
+  source runs on the rig with its leader — never remotely.
+
+### Running It
+
+Sim first — any publisher on `/leader/joint_states` stands in for the arm:
+
+```bash
+ros2 launch fm_bringup teleop.launch.py robot:=so101 input:=leader
+ros2 topic pub /leader_source/enable std_msgs/msg/Bool '{data: true}'
+```
+
+On hardware, `leader_driver` supplies the stream once the motors are provisioned with
+the scripts below:
+
+```bash
+ros2 run fm_teleop_leader leader_driver --ros-args -p port:=/dev/ttyACM0
+```
 
 ## Utility Scripts
 

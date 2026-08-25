@@ -9,7 +9,7 @@
 
   <depend>rclpy</depend>
 
-  <!-- The command contract is built from standard interfaces only (no fm_teleop_msgs). -->
+  <!-- The command contract is built from standard interfaces only. -->
   <depend>control_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>

@@ -36,7 +36,7 @@ from std_msgs.msg import Bool
 
 from fm_teleop_core.retarget import displacement_to_twist
 from fm_teleop_core.source import TeleopSource
-from fm_teleop_vision.filters import Vec3OneEuro
+from fm_teleop_core.filters import Vec3OneEuro
 
 
 class _LatestFrameCapture:

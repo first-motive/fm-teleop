@@ -37,7 +37,12 @@ No custom interface package (`fm_teleop_msgs`) exists by design — standard mes
 contract.py   the channel set above: message type + default topic per channel
 source.py     TeleopSource(Node): contract_publisher() + stamped_header()
 retarget.py   pure device-to-command math (deadzone, clamp, clamp_vector, scale)
+filters.py    One-Euro smoothing (scalar, 3-vector, and per-landmark skeleton)
 ```
+
+`retarget.py` and `filters.py` are pure math with no ROS import, so both sides of a
+tracked-input pipeline can share them — including the capture rig's hand tracker, which
+lives outside this repo and depends on this package for its smoothing.
 
 ## Writing a Source
 
