@@ -1,26 +1,16 @@
 """Vision retarget math — pure, ROS-free, unit-tested without a camera or a graph.
 
-This is the heart of vision teleop, kept free of rclpy/mediapipe so it can be tested in
-isolation (mirrors how fm_teleop_device/hand_presets.py and fm_teleop_core/retarget.py
-split pure math out of the nodes). Two groups of functions:
+The control half of the vision mirror: it takes the hand values the perception side
+produces (see ``fm_data_perception.landmarks``) and turns them into a robot command.
 
-PERCEPTION GEOMETRY (called by the tracker node to reduce raw hand landmarks):
-    palm_orientation(...)  -> a quaternion for the hand's pose
-    finger_curl(...)       -> a 0..1 openness/curl scalar for the gripper
-    control_position(...)  -> wrist pixels -> (x, y, depth) in normalized-image-WIDTH units
-
-CONTROL (called by the source node every tick):
-    linear_velocity(...)   -> clutch-referenced position error -> unitless [-1,1] twist
-    angular_velocity(...)  -> clutch-referenced orientation error -> unitless [-1,1] twist
     metric_mirror_target(...) -> indexed ~1:1 metric pose mirroring (+ clamp overflow)
     image_width_m / metric_scale / depth_delta_m -> pinhole image-units -> metres
-    grip_preset(...)       -> curl + hysteresis -> "open" | "close"
+    box_clamp / step_limit    -> keep the target in the dexterous region, bound its rate
+    grip_preset(...)          -> curl + hysteresis -> "open" | "close"
 
-The control functions implement a P-controller on the offset from a latched REFERENCE
-pose (captured at clutch engage), NOT raw frame-to-frame deltas: rate-independent, self-
-centering (hand back at the reference -> zero command), no integrated drift. MoveIt Servo
-consumes the result as a unitless velocity ([-1,1], it applies its own scale), so the
-source must emit this on a steady timer; zero when disengaged/stale.
+These implement an ABSOLUTE target latched to a REFERENCE pose (captured at clutch
+engage), not raw frame-to-frame deltas: a steady hand maps to a steady target, so a
+steady bias becomes a bounded offset rather than integrated drift.
 """
 
 from __future__ import annotations
@@ -29,228 +19,14 @@ import math
 
 from fm_teleop_core import retarget
 
-# --- small vector helpers (3-tuples; no numpy so the test needs no extra deps) -------
-
 
 def _sub(a, b):
+    """Component-wise a - b for two 3-tuples."""
     return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
-
-
-def _dot(a, b):
-    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-
-
-def _cross(a, b):
-    return (
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    )
-
-
-def _norm(a):
-    return math.sqrt(_dot(a, a))
-
-
-def _normalize(a):
-    n = _norm(a)
-    if n < 1e-9:
-        return None
-    return (a[0] / n, a[1] / n, a[2] / n)
-
-
-# --- quaternion helpers (w, x, y, z) -------------------------------------------------
-
-IDENTITY_QUAT = (1.0, 0.0, 0.0, 0.0)
-
-
-def quat_normalize(q):
-    n = math.sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3])
-    if n < 1e-9:
-        return IDENTITY_QUAT
-    return (q[0] / n, q[1] / n, q[2] / n, q[3] / n)
-
-
-def quat_conj(q):
-    return (q[0], -q[1], -q[2], -q[3])
-
-
-def quat_mul(a, b):
-    aw, ax, ay, az = a
-    bw, bx, by, bz = b
-    return (
-        aw * bw - ax * bx - ay * by - az * bz,
-        aw * bx + ax * bw + ay * bz - az * by,
-        aw * by - ax * bz + ay * bw + az * bx,
-        aw * bz + ax * by - ay * bx + az * bw,
-    )
-
-
-def quat_from_axes(x_axis, y_axis, z_axis):
-    """Quaternion for the rotation whose columns are the given orthonormal axes."""
-    r00, r01, r02 = x_axis[0], y_axis[0], z_axis[0]
-    r10, r11, r12 = x_axis[1], y_axis[1], z_axis[1]
-    r20, r21, r22 = x_axis[2], y_axis[2], z_axis[2]
-    t = r00 + r11 + r22
-    if t > 0.0:
-        s = math.sqrt(t + 1.0) * 2.0
-        qw = 0.25 * s
-        qx = (r21 - r12) / s
-        qy = (r02 - r20) / s
-        qz = (r10 - r01) / s
-    elif r00 > r11 and r00 > r22:
-        s = math.sqrt(1.0 + r00 - r11 - r22) * 2.0
-        qw = (r21 - r12) / s
-        qx = 0.25 * s
-        qy = (r01 + r10) / s
-        qz = (r02 + r20) / s
-    elif r11 > r22:
-        s = math.sqrt(1.0 + r11 - r00 - r22) * 2.0
-        qw = (r02 - r20) / s
-        qx = (r01 + r10) / s
-        qy = 0.25 * s
-        qz = (r12 + r21) / s
-    else:
-        s = math.sqrt(1.0 + r22 - r00 - r11) * 2.0
-        qw = (r10 - r01) / s
-        qx = (r02 + r20) / s
-        qy = (r12 + r21) / s
-        qz = 0.25 * s
-    return quat_normalize((qw, qx, qy, qz))
-
-
-def quat_to_rotvec(q):
-    """Rotation vector (axis * angle, radians) for quaternion q (shortest-arc)."""
-    w, x, y, z = quat_normalize(q)
-    if w < 0.0:  # take the shortest path
-        w, x, y, z = -w, -x, -y, -z
-    v_norm = math.sqrt(x * x + y * y + z * z)
-    if v_norm < 1e-9:
-        return (0.0, 0.0, 0.0)
-    angle = 2.0 * math.atan2(v_norm, w)
-    k = angle / v_norm
-    return (x * k, y * k, z * k)
-
-
-# --- perception geometry -------------------------------------------------------------
-
-
-def palm_orientation(wrist, index_mcp, middle_mcp, pinky_mcp):
-    """Quaternion of the hand frame from four palm points (world metres).
-
-    x = wrist -> middle knuckle (along the hand); z = palm normal; y completes a
-    right-handed frame. Returns IDENTITY_QUAT if the points are degenerate.
-    """
-    x_axis = _normalize(_sub(middle_mcp, wrist))
-    across = _normalize(_sub(pinky_mcp, index_mcp))
-    if x_axis is None or across is None:
-        return IDENTITY_QUAT
-    z_axis = _normalize(_cross(x_axis, across))
-    if z_axis is None:
-        return IDENTITY_QUAT
-    y_axis = _cross(z_axis, x_axis)
-    return quat_from_axes(x_axis, y_axis, z_axis)
-
-
-def finger_curl(wrist, middle_mcp, mcps, tips, *, open_ref=1.25, closed_ref=0.35):
-    """Return curl in [0,1]: 0 = fingers extended, 1 = fully curled.
-
-    openness = mean(|mcp_i - tip_i|) / |wrist - middle_mcp| (a scale-invariant ratio,
-    large when extended, small when curled). Mapped through (open_ref, closed_ref) and
-    clamped. The two refs are empirical and exposed as params for tuning.
-    """
-    scale = _norm(_sub(middle_mcp, wrist))
-    if scale < 1e-6 or not mcps or len(mcps) != len(tips):
-        return 0.0
-    openness = sum(_norm(_sub(t, m)) for m, t in zip(mcps, tips)) / len(tips) / scale
-    span = open_ref - closed_ref
-    if abs(span) < 1e-9:
-        return 0.0
-    return _clamp01((open_ref - openness) / span)
 
 
 def _clamp01(v):
     return 0.0 if v < 0.0 else (1.0 if v > 1.0 else v)
-
-
-# --- per-finger joint angles (the hand-skeleton annotation channel) -------------------
-
-# MediaPipe Hands 21-landmark finger chains, wrist-rooted: consecutive landmark indices
-# from the wrist out to each fingertip. Used to derive per-joint flexion angles.
-_FINGER_CHAINS = (
-    (0, 1, 2, 3, 4),      # thumb:  wrist, cmc, mcp, ip, tip
-    (0, 5, 6, 7, 8),      # index:  wrist, mcp, pip, dip, tip
-    (0, 9, 10, 11, 12),   # middle
-    (0, 13, 14, 15, 16),  # ring
-    (0, 17, 18, 19, 20),  # pinky
-)
-# Proximal-phalanx segment (base -> next joint) of each finger, for inter-finger
-# abduction (splay). Thumb uses mcp->ip; the four fingers use mcp->pip.
-_ABDUCTION_SEGMENTS = (
-    (2, 3),    # thumb   mcp -> ip
-    (5, 6),    # index   mcp -> pip
-    (9, 10),   # middle  mcp -> pip
-    (13, 14),  # ring    mcp -> pip
-    (17, 18),  # pinky   mcp -> pip
-)
-N_JOINT_ANGLES = 19  # 5 fingers x 3 flexion + 4 adjacent-finger abduction
-
-
-def _angle_between(u, v):
-    """Angle in radians between two 3-vectors (0..pi); 0.0 if either is degenerate."""
-    nu = _normalize(u)
-    nv = _normalize(v)
-    if nu is None or nv is None:
-        return 0.0
-    d = _dot(nu, nv)
-    d = -1.0 if d < -1.0 else (1.0 if d > 1.0 else d)
-    return math.acos(d)
-
-
-def _flexion(p_prev, p_joint, p_next):
-    """Bend at p_joint: angle between the incoming and outgoing bone (0 = straight)."""
-    return _angle_between(_sub(p_joint, p_prev), _sub(p_next, p_joint))
-
-
-def finger_joint_angles(landmarks):
-    """Per-finger articulation (radians) from the 21 world landmarks.
-
-    ``landmarks`` is any sequence indexable by MediaPipe landmark index (0..20)
-    returning an (x, y, z) world point (a list or an idx->point dict both work).
-    Returns a fixed list of ``N_JOINT_ANGLES`` floats — flexion = angle between
-    adjacent bones (0 = straight, larger = more bent) — laid out as documented on
-    fm_teleop_msgs/HandSkeleton.joint_angles:
-        0-2 thumb / 3-5 index / 6-8 middle / 9-11 ring / 12-14 pinky   (flexion)
-        15-18 abduction [thumb-index, index-middle, middle-ring, ring-pinky]
-    Degenerate points yield 0.0 for the affected angle rather than raising.
-    """
-    angles = []
-    for chain in _FINGER_CHAINS:
-        p = [landmarks[i] for i in chain]
-        # joints with both a parent and a child: chain[1], chain[2], chain[3]
-        angles.append(_flexion(p[0], p[1], p[2]))
-        angles.append(_flexion(p[1], p[2], p[3]))
-        angles.append(_flexion(p[2], p[3], p[4]))
-    dirs = [_sub(landmarks[b], landmarks[a]) for a, b in _ABDUCTION_SEGMENTS]
-    for i in range(len(dirs) - 1):
-        angles.append(_angle_between(dirs[i], dirs[i + 1]))
-    return angles
-
-
-def control_position(wrist_px, middle_mcp_px, image_w):
-    """(x, y, depth) control position in normalized-image-WIDTH units from pixel landmarks.
-
-    ALL components are normalized by the image WIDTH — x in [0,1], y in [0, h/w] — so one
-    metres-per-unit factor (``image_width_m`` at the hand's distance) applies uniformly to
-    every axis. (Normalizing y by the height would shrink vertical motion by the aspect
-    ratio relative to horizontal.) depth = the apparent hand size (wrist -> middle MCP)
-    over the width: the mono depth proxy (hand bigger = closer).
-    """
-    wx_px, wy_px = wrist_px
-    mx_px, my_px = middle_mcp_px
-    size = ((mx_px - wx_px) ** 2 + (my_px - wy_px) ** 2) ** 0.5
-    w = max(image_w, 1)
-    return (wx_px / w, wy_px / w, size / w)
 
 
 # --- axis remap (operator/vision frame -> robot command frame) -----------------------
@@ -276,8 +52,6 @@ def remap(vec, parsed_axis_map):
     return tuple(parsed_axis_map[i][1] * vec[parsed_axis_map[i][0]] for i in range(3))
 
 
-# --- control: clutch-referenced error -> unitless velocity ---------------------------
-
 
 def _seq3(v):
     """Accept a scalar (broadcast) or a length-3 sequence; return a 3-tuple of floats."""
@@ -287,49 +61,6 @@ def _seq3(v):
     if len(out) != 3:
         raise ValueError(f"expected a scalar or 3 values, got {len(out)}.")
     return out
-
-
-def _shape3(error_vec, axis_map, gain, deadzone, max_cmd):
-    """deadzone + per-axis gain in the INPUT frame, remap to the command frame, clamp.
-
-    Gains/deadzones are given in the intuitive input axes (e.g. image horizontal /
-    vertical / depth), then ``axis_map`` reorders+signs into the command frame; clamp is
-    symmetric so applying it last is equivalent.
-    """
-    g = _seq3(gain)
-    d = _seq3(deadzone)
-    shaped = tuple(retarget.scale(retarget.deadzone(error_vec[i], d[i]), g[i]) for i in range(3))
-    remapped = remap(shaped, axis_map)
-    return tuple(retarget.clamp(v, -max_cmd, max_cmd) for v in remapped)
-
-
-def linear_velocity(ref_pos, cur_pos, axis_map, *, gain, deadzone_m, max_cmd):
-    """Unitless [-max,max] linear twist from the wrist offset since clutch engage.
-
-    ``gain``/``deadzone_m`` may be a scalar or a length-3 (per input axis) sequence.
-    """
-    return _shape3(_sub(cur_pos, ref_pos), axis_map, gain, deadzone_m, max_cmd)
-
-
-def angular_velocity(ref_quat, cur_quat, axis_map, *, gain, deadzone_rad, max_cmd):
-    """Unitless [-max,max] angular twist from the orientation offset since engage.
-
-    error = ref^-1 * cur (relative rotation in the reference frame), as a rotation vector.
-    The deadzone gates the rotation MAGNITUDE (a rotation vector's components are not
-    independent, so a per-component deadzone would be anisotropic), with a soft rescale so
-    the command stays continuous at the boundary; then per-axis gain, remap, and clamp.
-    ``deadzone_rad`` is a scalar (radians); ``gain`` may be scalar or length-3.
-    """
-    err = quat_mul(quat_conj(ref_quat), cur_quat)
-    rotvec = quat_to_rotvec(err)
-    n = math.sqrt(rotvec[0] ** 2 + rotvec[1] ** 2 + rotvec[2] ** 2)
-    if n <= deadzone_rad:
-        return (0.0, 0.0, 0.0)
-    soft = (n - deadzone_rad) / n  # continuous at the deadzone boundary
-    g = _seq3(gain)
-    shaped = tuple(retarget.scale(rotvec[i] * soft, g[i]) for i in range(3))
-    remapped = remap(shaped, axis_map)
-    return tuple(retarget.clamp(v, -max_cmd, max_cmd) for v in remapped)
 
 
 # --- control: absolute pose mirroring (for MoveIt Servo PoseTracking) ----------------

@@ -1,8 +1,8 @@
 """Pure unit tests for fm_teleop_vision.mapping — no ROS graph, no camera, no mediapipe.
 
-Covers the quaternion/axis math, the clutch-referenced position/orientation -> velocity
-control, and the gripper hysteresis. (cv2/mediapipe are NOT imported by mapping, so these
-run anywhere fm_teleop_core is on the path.)
+Covers the axis remap, the absolute/metric pose mirroring, the workspace clamp and step
+limit, and the gripper hysteresis. The hand-landmark geometry these consume is tested in
+fm_data_perception.
 """
 
 import math
@@ -10,136 +10,6 @@ import math
 import pytest
 
 from fm_teleop_vision import mapping
-
-
-# --- quaternion + geometry -----------------------------------------------------------
-
-
-def test_identity_quat_has_zero_rotvec():
-    assert mapping.quat_to_rotvec(mapping.IDENTITY_QUAT) == (0.0, 0.0, 0.0)
-
-
-def test_rotvec_of_z_rotation():
-    theta = 0.4
-    q = (math.cos(theta / 2), 0.0, 0.0, math.sin(theta / 2))  # rotation about +z
-    rx, ry, rz = mapping.quat_to_rotvec(q)
-    assert rx == pytest.approx(0.0, abs=1e-6)
-    assert ry == pytest.approx(0.0, abs=1e-6)
-    assert rz == pytest.approx(theta, abs=1e-6)
-
-
-def test_quat_from_axes_identity():
-    q = mapping.quat_from_axes((1, 0, 0), (0, 1, 0), (0, 0, 1))
-    assert q[0] == pytest.approx(1.0)
-    assert q[1:] == pytest.approx((0.0, 0.0, 0.0))
-
-
-def test_palm_orientation_degenerate_is_identity():
-    p = (0.0, 0.0, 0.0)
-    assert mapping.palm_orientation(p, p, p, p) == mapping.IDENTITY_QUAT
-
-
-def test_palm_orientation_is_unit_quat():
-    wrist = (0.0, 0.0, 0.0)
-    middle_mcp = (0.0, 0.10, 0.0)   # hand points +y
-    index_mcp = (-0.03, 0.09, 0.0)
-    pinky_mcp = (0.03, 0.09, 0.0)
-    q = mapping.palm_orientation(wrist, index_mcp, middle_mcp, pinky_mcp)
-    assert math.sqrt(sum(c * c for c in q)) == pytest.approx(1.0, abs=1e-6)
-
-
-# --- finger curl ---------------------------------------------------------------------
-
-
-def _curl(open_factor):
-    """Helper: tips at `open_factor` of the hand scale from their MCPs."""
-    wrist = (0.0, 0.0, 0.0)
-    middle_mcp = (0.0, 0.10, 0.0)       # scale = 0.10
-    mcps = [(0.0, 0.10, 0.0)] * 4
-    tips = [(0.0, 0.10 + open_factor * 0.10, 0.0)] * 4
-    return mapping.finger_curl(wrist, middle_mcp, mcps, tips)
-
-
-def test_finger_curl_extended_low_curled_high():
-    extended = _curl(1.3)   # tips far from mcps -> openness high -> curl low
-    curled = _curl(0.2)     # tips near mcps      -> openness low  -> curl high
-    assert extended < 0.2
-    assert curled > 0.8
-    assert 0.0 <= extended <= 1.0 and 0.0 <= curled <= 1.0
-
-
-def test_finger_curl_degenerate_zero():
-    p = (0.0, 0.0, 0.0)
-    assert mapping.finger_curl(p, p, [p], [p]) == 0.0
-
-
-# --- finger joint angles -------------------------------------------------------------
-
-
-# Each finger's four landmarks lie on a ray from the wrist, so every finger is perfectly
-# straight (zero flexion) while adjacent fingers splay apart (non-zero abduction).
-_STRAIGHT_HAND_DIRS = {
-    (1, 2, 3, 4): (-0.5, 1.0, 0.0),      # thumb
-    (5, 6, 7, 8): (-0.2, 1.0, 0.0),      # index
-    (9, 10, 11, 12): (0.0, 1.0, 0.0),    # middle
-    (13, 14, 15, 16): (0.15, 1.0, 0.0),  # ring
-    (17, 18, 19, 20): (0.3, 1.0, 0.0),   # pinky
-}
-
-
-def _straight_hand():
-    pts = [(0.0, 0.0, 0.0)] * 21          # wrist at origin (index 0)
-    for chain, dv in _STRAIGHT_HAND_DIRS.items():
-        n = math.sqrt(dv[0] ** 2 + dv[1] ** 2 + dv[2] ** 2)
-        u = (dv[0] / n, dv[1] / n, dv[2] / n)
-        for idx, r in zip(chain, (0.06, 0.09, 0.11, 0.13)):
-            pts[idx] = (u[0] * r, u[1] * r, u[2] * r)
-    return pts
-
-
-def test_finger_joint_angles_length():
-    assert len(mapping.finger_joint_angles(_straight_hand())) == mapping.N_JOINT_ANGLES == 19
-
-
-def _angle(u, v):
-    du = math.sqrt(sum(c * c for c in u))
-    dv = math.sqrt(sum(c * c for c in v))
-    return math.acos(sum(a * b for a, b in zip(u, v)) / (du * dv))
-
-
-def test_straight_hand_zero_flexion_positive_abduction():
-    a = mapping.finger_joint_angles(_straight_hand())
-    for flex in a[:15]:                  # every per-finger flexion angle
-        assert flex == pytest.approx(0.0, abs=1e-6)
-    for splay in a[15:]:                 # adjacent fingers are spread apart
-        assert splay > 0.0
-    # thumb->index abduction equals the angle between their rays.
-    expected = _angle((-0.5, 1.0, 0.0), (-0.2, 1.0, 0.0))
-    assert a[15] == pytest.approx(expected, abs=1e-6)
-
-
-def test_bent_pip_is_ninety_degrees():
-    pts = _straight_hand()
-    pts[5] = (0.0, 0.06, 0.0)            # index mcp
-    pts[6] = (0.0, 0.09, 0.0)            # index pip   (mcp->pip along +y)
-    pts[7] = (0.03, 0.09, 0.0)           # index dip   (pip->dip along +x -> 90 deg)
-    pts[8] = (0.05, 0.09, 0.0)           # index tip
-    a = mapping.finger_joint_angles(pts)
-    assert a[4] == pytest.approx(math.pi / 2, abs=1e-6)   # index PIP flexion
-
-
-def test_finger_joint_angles_accepts_dict():
-    pts = _straight_hand()
-    as_dict = {i: p for i, p in enumerate(pts)}
-    assert mapping.finger_joint_angles(as_dict) == mapping.finger_joint_angles(pts)
-
-
-def test_finger_joint_angles_degenerate_zero():
-    a = mapping.finger_joint_angles([(0.0, 0.0, 0.0)] * 21)
-    assert a == [0.0] * mapping.N_JOINT_ANGLES
-
-
-# --- axis map ------------------------------------------------------------------------
 
 
 def test_parse_and_remap_axis_map():
@@ -154,74 +24,8 @@ def test_parse_axis_map_validates():
         mapping.parse_axis_map(["x", "y", "w"])     # bad axis
 
 
-# --- linear velocity (clutch-referenced) ---------------------------------------------
-
 _IDENT = mapping.parse_axis_map(["x", "y", "z"])
 
-
-def test_linear_zero_at_reference():
-    v = mapping.linear_velocity((0, 0, 0), (0, 0, 0), _IDENT, gain=5.0, deadzone_m=0.005, max_cmd=1.0)
-    assert v == (0.0, 0.0, 0.0)
-
-
-def test_linear_deadzone_suppresses_tiny_offset():
-    v = mapping.linear_velocity((0, 0, 0), (0.002, 0, 0), _IDENT, gain=5.0, deadzone_m=0.005, max_cmd=1.0)
-    assert v == (0.0, 0.0, 0.0)
-
-
-def test_linear_scales_and_clamps():
-    v = mapping.linear_velocity((0, 0, 0), (0.1, 0, 0), _IDENT, gain=5.0, deadzone_m=0.005, max_cmd=1.0)
-    assert v[0] == pytest.approx(0.5)            # 0.1 * 5
-    big = mapping.linear_velocity((0, 0, 0), (1.0, 0, 0), _IDENT, gain=5.0, deadzone_m=0.005, max_cmd=1.0)
-    assert big[0] == pytest.approx(1.0)          # clamped to max_cmd
-
-
-def test_linear_respects_axis_map():
-    amap = mapping.parse_axis_map(["z", "x", "-y"])
-    v = mapping.linear_velocity((0, 0, 0), (0.1, 0, 0), amap, gain=1.0, deadzone_m=0.0, max_cmd=1.0)
-    assert v == pytest.approx((0.0, 0.1, 0.0))   # input x -> output y
-
-
-# --- angular velocity ----------------------------------------------------------------
-
-
-def test_angular_zero_when_unrotated():
-    v = mapping.angular_velocity(mapping.IDENTITY_QUAT, mapping.IDENTITY_QUAT, _IDENT,
-                                 gain=1.0, deadzone_rad=0.0, max_cmd=10.0)
-    assert v == (0.0, 0.0, 0.0)
-
-
-def test_angular_tracks_relative_rotation():
-    theta = 0.3
-    cur = (math.cos(theta / 2), 0.0, 0.0, math.sin(theta / 2))
-    v = mapping.angular_velocity(mapping.IDENTITY_QUAT, cur, _IDENT,
-                                 gain=1.0, deadzone_rad=0.0, max_cmd=10.0)
-    assert v[2] == pytest.approx(theta, abs=1e-6)
-    assert v[0] == pytest.approx(0.0, abs=1e-6)
-    assert v[1] == pytest.approx(0.0, abs=1e-6)
-
-
-def test_angular_deadzone_is_magnitude_based():
-    # Deadzone must gate the rotation MAGNITUDE, not per-axis components: an off-axis
-    # rotation just above the threshold must still command motion (the per-component bug
-    # would zero it because each component is below the threshold).
-    axis = (1.0 / math.sqrt(2), 1.0 / math.sqrt(2), 0.0)
-
-    def quat(theta):
-        s = math.sin(theta / 2)
-        return (math.cos(theta / 2), axis[0] * s, axis[1] * s, axis[2] * s)
-
-    below = mapping.angular_velocity(mapping.IDENTITY_QUAT, quat(0.04), _IDENT,
-                                     gain=1.0, deadzone_rad=0.05, max_cmd=10.0)
-    assert below == (0.0, 0.0, 0.0)              # magnitude 0.04 < 0.05 -> suppressed
-
-    above = mapping.angular_velocity(mapping.IDENTITY_QUAT, quat(0.06), _IDENT,
-                                     gain=1.0, deadzone_rad=0.05, max_cmd=10.0)
-    assert above[0] > 0.0 and above[1] > 0.0     # magnitude 0.06 > 0.05 -> not zeroed
-    assert above[2] == pytest.approx(0.0, abs=1e-9)
-
-
-# --- absolute pose mirroring ---------------------------------------------------------
 
 _BIG_BOX = ((-10.0, -10.0, -10.0), (10.0, 10.0, 10.0))
 
@@ -267,9 +71,6 @@ def test_mirror_target_clamps_to_workspace_box():
     assert t[0] == pytest.approx(0.5)            # 0.45 + 0.5 = 0.95 -> clamped to xmax 0.5
     assert t[1] == pytest.approx(0.0)
     assert t[2] == pytest.approx(0.4)
-
-
-# --- metric mirroring (image units -> metres via apparent hand size) ------------------
 
 
 def test_image_width_m_pinhole():
@@ -393,16 +194,6 @@ def test_step_limit_disabled_returns_target():
     assert mapping.step_limit(prev, target, -1.0) == pytest.approx(target)
 
 
-def test_control_position_normalizes_y_by_width():
-    pos = mapping.control_position((960.0, 540.0), (960.0, 640.0), 1920)
-    assert pos[0] == pytest.approx(0.5)
-    assert pos[1] == pytest.approx(540.0 / 1920.0)   # y over WIDTH: uniform units with x
-    assert pos[2] == pytest.approx(100.0 / 1920.0)   # apparent size over width
-
-
-# --- gripper -------------------------------------------------------------------------
-
-
 def test_grip_preset_hysteresis():
     assert mapping.grip_preset(0.9, "open", open_below=0.35, close_above=0.65) == "close"
     assert mapping.grip_preset(0.1, "close", open_below=0.35, close_above=0.65) == "open"
@@ -415,3 +206,4 @@ def test_grip_preset_hysteresis():
 def test_grip_position_endpoints():
     assert mapping.grip_position(0.0, open_pos=1.5, close_pos=-0.17) == pytest.approx(1.5)
     assert mapping.grip_position(1.0, open_pos=1.5, close_pos=-0.17) == pytest.approx(-0.17)
+

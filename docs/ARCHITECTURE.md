@@ -17,10 +17,10 @@ This repo is the teleop layer in isolation. The servo node and its safety config
 
 | Package | Build | Responsibility |
 |---------|-------|----------------|
-| `fm_teleop_core` | ament_python | The contract (channel definitions), `TeleopSource` base node, pure retarget math |
+| `fm_teleop_core` | ament_python | The contract (channel definitions), `TeleopSource` base node, pure retarget math and One-Euro filters |
 | `fm_teleop_msgs` | ament_cmake | Perception interfaces (`HandSkeleton`, `HandQuality`) — observations, not commands |
 | `fm_teleop_device` | ament_python | Physical device sources: gamepad, SpaceMouse, G1 hand presets/sliders |
-| `fm_teleop_vision` | ament_python | Camera wrist-tracking source (MediaPipe Pose → arm twist, One-Euro filtered) |
+| `fm_teleop_vision` | ament_python | Camera teleop sources: wrist jog and the 1:1 hand mirror. The hand tracker that feeds the mirror runs on the capture rig (`fm_data_perception`, in fm-data) |
 | `fm_teleop_leader` | ament_python | Leader-arm source: leader joints → follower controller (bypasses Servo) |
 | `fm_teleop_vr` | ament_python | VR-controller source: pose → arm jog, stick → base, grip → hand |
 | `fm_teleop_panel` | npm (TS/React) | Foxglove Studio operator panel — the primary fleet input |
@@ -59,7 +59,7 @@ control owns *limits*.
 | Gamepad | `joy_to_servo` | `sensor_msgs/Joy` on `/joy` | `arm_twist` |
 | SpaceMouse | `spacenav_to_servo` | `geometry_msgs/Twist` on `/spacenav/twist` (Linux/USB only) | `arm_twist` |
 | Vision | `vision_source` | camera → MediaPipe wrist track, enabled by `/vision_teleop/enable` deadman | `arm_twist` |
-| Vision mirror | `mirror_source` | `fm_teleop_msgs/HandSkeleton` from `hand_tracker` | `arm_pose_target`, `hand_preset` |
+| Vision mirror | `mirror_source` | `fm_teleop_msgs/HandSkeleton` from the rig's tracker | `arm_pose_target`, `hand_preset` |
 | Hand | `g1_hand_teleop` | preset/slider topics | `JointTrajectory` to hand controllers |
 | Panel | Foxglove extension | browser widgets | `arm_twist`, `arm_joint`, `base_twist`, hand channels |
 | Leader | `leader_source` | leader `/joint_states`, enabled by `~/enable` deadman | `arm_trajectory` |
@@ -91,7 +91,7 @@ modules — importable and testable without the camera stack.
 |-----------|-----------------|--------|
 | **One contract, many sources** | Every source publishes through `fm_teleop_core/contract.py` | A new input device is a new node, nothing downstream changes |
 | **Intent vs limits split** | Sources emit unitless magnitudes; servo scales + clamps | Safety lives in one place, not per device |
-| **Pure math, no ROS** | `retarget.py`, `filters.py`, `pose.py`, `hand_presets.py` | Retarget and filtering unit-test without rclpy or hardware |
+| **Pure math, no ROS** | `fm_teleop_core/retarget.py`, `fm_teleop_core/filters.py`, `pose.py`, `hand_presets.py`, `follow.py` | Retarget and filtering unit-test without rclpy or hardware |
 | **Standard messages on commands** | Every contract channel is a standard interface; `fm_teleop_msgs` carries perception output only | Any ROS tool can inspect the channels; no command interface to version |
 
 Per-package detail lives in each `<package>/README.md`.
