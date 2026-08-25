@@ -15,6 +15,7 @@ with the other six package repos by
 | Package | Build | Role |
 |---------|-------|------|
 | `fm_teleop_core` | ament_python | Shared command contract every input publishes to |
+| `fm_teleop_msgs` | ament_cmake | Perception interfaces (`HandSkeleton`, `HandQuality`) |
 | `fm_teleop_device` | ament_python | Gamepad / handheld device input |
 | `fm_teleop_leader` | ament_python | Leader-arm input |
 | `fm_teleop_vr` | ament_python | VR controller input |

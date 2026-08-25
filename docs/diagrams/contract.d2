@@ -9,6 +9,7 @@ direction: right
 joy: joy_to_servo { class: node }
 spacenav: spacenav_to_servo { class: node }
 vision: vision_source { class: node }
+mirror: mirror_source { class: node }
 panel: "Foxglove panel" { class: node }
 leader: "leader_source (stub)" { class: node; style.stroke-dash: 4 }
 vr: "vr_source (stub)" { class: node; style.stroke-dash: 4 }
@@ -16,6 +17,7 @@ hand: g1_hand_teleop { class: node }
 
 arm_twist: /servo_node/delta_twist_cmds { class: topic }
 arm_joint: /servo_node/delta_joint_cmds { class: topic }
+arm_pose: /target_pose { class: topic }
 base_twist: /cmd_vel { class: topic }
 hand_ch: "hand preset · sliders" { class: topic }
 arm_traj: arm_trajectory { class: topic }
@@ -28,6 +30,8 @@ arm_ctrl: arm controller { class: node }
 joy -> arm_twist
 spacenav -> arm_twist
 vision -> arm_twist
+mirror -> arm_pose
+mirror -> hand_ch
 panel -> arm_twist
 panel -> arm_joint
 panel -> base_twist
@@ -39,5 +43,6 @@ vr -> arm_twist
 
 arm_twist -> servo
 arm_joint -> servo
+arm_pose -> servo: pose tracking
 base_twist -> base
 arm_traj -> arm_ctrl: leader bypass
