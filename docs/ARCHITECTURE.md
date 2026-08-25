@@ -21,7 +21,7 @@ This repo is the teleop layer in isolation. The servo node and its safety config
 | `fm_teleop_msgs` | ament_cmake | Perception interfaces (`HandSkeleton`, `HandQuality`) — observations, not commands |
 | `fm_teleop_device` | ament_python | Physical device sources: gamepad, SpaceMouse, G1 hand presets/sliders |
 | `fm_teleop_vision` | ament_python | Camera wrist-tracking source (MediaPipe Pose → arm twist, One-Euro filtered) |
-| `fm_teleop_leader` | ament_python | Leader-arm source — skeleton (`NotImplementedError`) |
+| `fm_teleop_leader` | ament_python | Leader-arm source: leader joints → follower controller (bypasses Servo) |
 | `fm_teleop_vr` | ament_python | VR-controller source — skeleton (`NotImplementedError`) |
 | `fm_teleop_panel` | npm (TS/React) | Foxglove Studio operator panel — the primary fleet input |
 | `fm_teleop` | ament_cmake (meta) | Metapackage bundling the ROS input packages |
@@ -62,7 +62,7 @@ control owns *limits*.
 | Vision mirror | `mirror_source` | `fm_teleop_msgs/HandSkeleton` from `hand_tracker` | `arm_pose_target`, `hand_preset` |
 | Hand | `g1_hand_teleop` | preset/slider topics | `JointTrajectory` to hand controllers |
 | Panel | Foxglove extension | browser widgets | `arm_twist`, `arm_joint`, `base_twist`, hand channels |
-| Leader | `leader_source` *(stub)* | leader `/joint_states` | `arm_trajectory` (planned) |
+| Leader | `leader_source` | leader `/joint_states`, enabled by `~/enable` deadman | `arm_trajectory` |
 | VR | `vr_source` *(stub)* | VR pose/buttons | `arm_twist`, `base_twist`, hand (planned) |
 
 The Foxglove panel is the richest source: it is robot-aware (mirrors the

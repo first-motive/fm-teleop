@@ -2,7 +2,7 @@
 # the sinks in the control stack consume those channels. Sources never hard-code
 # topics; they publish through fm_teleop_core's contract. Swap an input device
 # without touching anything downstream. Sources + sinks are plum nodes; the
-# contract channels are cream topic pills. Leader and VR are stubs (dashed).
+# contract channels are cream topic pills. VR is a stub (dashed).
 ...@styles
 direction: right
 
@@ -11,7 +11,7 @@ spacenav: spacenav_to_servo { class: node }
 vision: vision_source { class: node }
 mirror: mirror_source { class: node }
 panel: "Foxglove panel" { class: node }
-leader: "leader_source (stub)" { class: node; style.stroke-dash: 4 }
+leader: leader_source { class: node }
 vr: "vr_source (stub)" { class: node; style.stroke-dash: 4 }
 hand: g1_hand_teleop { class: node }
 
