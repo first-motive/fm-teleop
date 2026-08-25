@@ -14,7 +14,7 @@ setup(
     zip_safe=True,
     maintainer="First Motive",
     maintainer_email="nish@ubundi.co.za",
-    description="Teleop source skeleton: VR controllers",
+    description="Teleop source: VR controllers (pose -> arm, stick -> base, grip -> hand)",
     license="Apache-2.0",
     tests_require=["pytest"],
     entry_points={

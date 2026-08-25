@@ -2,7 +2,7 @@
 # the sinks in the control stack consume those channels. Sources never hard-code
 # topics; they publish through fm_teleop_core's contract. Swap an input device
 # without touching anything downstream. Sources + sinks are plum nodes; the
-# contract channels are cream topic pills. VR is a stub (dashed).
+# contract channels are cream topic pills.
 ...@styles
 direction: right
 
@@ -12,7 +12,7 @@ vision: vision_source { class: node }
 mirror: mirror_source { class: node }
 panel: "Foxglove panel" { class: node }
 leader: leader_source { class: node }
-vr: "vr_source (stub)" { class: node; style.stroke-dash: 4 }
+vr: vr_source { class: node }
 hand: g1_hand_teleop { class: node }
 
 arm_twist: /servo_node/delta_twist_cmds { class: topic }
@@ -40,6 +40,8 @@ hand_ch -> hand
 hand -> hand_ctrl
 leader -> arm_traj
 vr -> arm_twist
+vr -> base_twist
+vr -> hand_ch
 
 arm_twist -> servo
 arm_joint -> servo
