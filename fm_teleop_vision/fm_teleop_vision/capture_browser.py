@@ -86,7 +86,11 @@ class CaptureBrowser(Node):
         try:
             if os.path.exists(cache) and os.path.getmtime(cache) >= os.path.getmtime(csv_path):
                 with open(cache) as f:
-                    return json.load(f)
+                    light = json.load(f)
+                # The directory name is the id; a copied or renamed take must
+                # not keep reporting its old one.
+                light["session"] = os.path.basename(d)
+                return light
         except Exception:
             pass
         meta = self._read_meta(d)
