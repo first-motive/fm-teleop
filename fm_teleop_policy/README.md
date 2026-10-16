@@ -65,6 +65,21 @@ The server starts **disengaged** and publishes nothing until `~/enable`
 so a controller keeps one writer and one motion path; engaging is the operator's
 act. The deferred `fm_fsm` arbiter will own that gate without a change here.
 
+`engage_on_start` is the sim-only exception. When it is true, the server engages
+itself, through the same path as `~/enable`, on the first observation that names
+every joint of the arm with a finite value. It does so once, so a later disengage
+holds, and the stale and finite checks below still apply. The server refuses it
+unless both `use_sim_time` and `sim_only` are true; it logs an error and stays
+disengaged. Any message on `~/enable` cancels a pending self-engage, so the
+operator's gate wins.
+
+The engage is local to this server: nothing is published, so it cannot engage
+another server. It does not by itself keep a sim run away from a real robot. That
+safety rests on the sim host's DDS being host-local, which is the fm-sim agent's
+default. The two guards above are config, not enforcement: `sim.launch.py` sets
+`sim_only` by convention, and anyone starting `policy_server` by hand can set both. A server with both guards set, on a
+graph shared with a real arm, would engage and drive whatever Servo it reaches.
+
 Inference runs on its own thread, in its own callback group under a two-thread
 executor, so a slow model never stalls the control tick. A chunk whose inference
 straddled a disengage is discarded, and an action with a NaN or inf value drops
@@ -96,6 +111,29 @@ ros2 launch fm_teleop_policy policy.launch.py \
   policy_type:=lerobot checkpoint:=/path/to/checkpoint
 ```
 
+## Sim Catalog
+
+The package registers two controllers in fm-sim's catalog (the `fm_sim.controllers`
+ament resource type). Each marker under `resource/fm_sim.controllers/` holds the
+share path of its entry yaml in `catalog/controllers/`.
+
+| Entry | Available | Launch | Why |
+|-------|-----------|--------|-----|
+| `policy_serve` | no | `launch/sim.launch.py` | Its JointJog output needs MoveIt Servo on `/servo_node`, and no Jazzy sim role starts Servo yet |
+| `fastwam` | no | none | World-action-model placeholder; no controller code exists |
+
+`run.launch.py` lists both and refuses to start either. `sim.launch.py` takes the
+three arguments a run passes: `use_sim` (default `false`), `robot_profile`
+(required), and `scenario`. It rejects a malformed or unknown value before anything
+starts, and starts the server alone, with the zero policy and the right arm. With
+`use_sim:=true` it sets `use_sim_time` and `engage_on_start` on the server, because
+a sim run has no operator to hold the gate. It always sets `sim_only`. With
+`use_sim:=false` the server stays disengaged.
+
+`test/catalog.schema.json` is a copy of fm-sim's catalog schema, because this repo's
+CI does not build fm-sim. `test/test_catalog.py` names the fm-sim commit it came
+from.
+
 ## Parameters
 
 Every parameter is read-only after startup.
@@ -115,6 +153,8 @@ Every parameter is read-only after startup.
 | `status_rate_hz` | `1.0` | Status line cadence |
 | `chunk_timeout` | `1.0` | Seconds an unrefilled chunk stays publishable |
 | `observation_timeout` | `0.5` | Seconds without an observation before inference stops |
+| `engage_on_start` | `false` | Engage on the first complete, finite observation; refused unless `use_sim_time` and `sim_only` are true |
+| `sim_only` | `false` | Marks a sim-launched server; `sim.launch.py` sets it by convention |
 
 ## Test
 

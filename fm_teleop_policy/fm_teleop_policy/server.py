@@ -11,6 +11,7 @@ control tick. The engage gate and the two timeouts are described in the package 
 """
 
 import json
+import math
 import os
 import threading
 import time
@@ -67,6 +68,12 @@ class PolicyServer(TeleopSource):
         self._observation_timeout = float(self._declare(
             "observation_timeout", 0.5,
             "Seconds without an observation before inference and publishing stop."))
+        engage_on_start = bool(self._declare(
+            "engage_on_start", False,
+            "Sim only: engage on the first observation, without an operator on the gate."))
+        sim_only = bool(self._declare(
+            "sim_only", False,
+            "Set only by sim.launch.py; engage_on_start is refused without it."))
 
         profile = load_profile(self._profile_name)
         self._joints = arm_joints(profile, self._arm)
@@ -91,6 +98,17 @@ class PolicyServer(TeleopSource):
         self._chunk_stamp = None
         self._inference_seconds = None
         self._error = None
+        # Self-engage touches this server only (no topic publish), so it can never
+        # engage another server on a shared graph. It is refused unless both sim_time
+        # and sim_only say this server runs in a sim, not against a real arm.
+        self._engage_on_first_observation = (
+            engage_on_start and sim_only and self._on_sim_time()
+        )
+        if engage_on_start and not self._engage_on_first_observation:
+            self.get_logger().error(
+                "policy_server: engage_on_start needs use_sim_time and sim_only; "
+                "staying disengaged."
+            )
 
         self.create_subscription(JointState, observation_topic, self._on_observation, 10)
         self.create_subscription(Bool, enable_topic, self._on_enable, 10)
@@ -117,30 +135,60 @@ class PolicyServer(TeleopSource):
             ParameterDescriptor(description=description, read_only=True),
         ).value
 
+    def _on_sim_time(self):
+        return self.get_parameter("use_sim_time").value is True
+
+    def _covers_arm(self, state):
+        return all(
+            joint in state and math.isfinite(state[joint]) for joint in self._joints
+        )
+
     def _observation_stale(self, now):
         return now - self._observation_stamp > self._observation_timeout
 
     def _on_observation(self, msg):
         observation = {"observation.state": dict(zip(msg.name, msg.position))}
+        changed = False
         with self._lock:
             self._observation = observation
             self._observation_stamp = time.monotonic()
+            # The one-shot waits for an observation that fully and finitely covers
+            # the arm, so the first chunk is inferred from a real state. It engages
+            # in this same locked block, so an operator disengage cannot land
+            # between the check and the engage and then be overridden.
+            if self._engage_on_first_observation and self._covers_arm(
+                observation["observation.state"]
+            ):
+                self._engage_on_first_observation = False
+                changed = self._apply_engaged(True)
+        if changed:
+            self._log_engaged(True)
 
     def _on_enable(self, msg):
         engaged = bool(msg.data)
         with self._lock:
-            changed = engaged != self._engaged
-            if changed:
-                self._engagement += 1
-            if not engaged:
-                # Drop the buffered chunk: on re-engage the arm must act on a fresh
-                # observation, not on actions inferred before the operator took over.
-                self._chunk = []
-            self._engaged = engaged
+            # The operator has the gate now; a pending one-shot would overrule them.
+            self._engage_on_first_observation = False
+            changed = self._apply_engaged(engaged)
         if changed:
-            self.get_logger().info(
-                f"policy_server: {'engaged' if engaged else 'disengaged'}."
-            )
+            self._log_engaged(engaged)
+
+    def _apply_engaged(self, engaged):
+        """Set the gate and return whether it changed; the caller holds the lock."""
+        changed = engaged != self._engaged
+        if changed:
+            self._engagement += 1
+        if not engaged:
+            # Drop the buffered chunk: on re-engage the arm must act on a fresh
+            # observation, not on actions inferred before the operator took over.
+            self._chunk = []
+        self._engaged = engaged
+        return changed
+
+    def _log_engaged(self, engaged):
+        self.get_logger().info(
+            f"policy_server: {'engaged' if engaged else 'disengaged'}."
+        )
 
     def _infer(self):
         with self._lock:

@@ -446,3 +446,110 @@ def test_status_names_the_checkpoint_by_basename_only(ros):
         assert node.status()["checkpoint"] == "act_can"
     finally:
         node.destroy_node()
+
+
+SIM_ENGAGE = {"engage_on_start": True, "use_sim_time": True, "sim_only": True}
+
+
+def test_engage_on_start_engages_on_the_first_observation_in_sim(ros):
+    node = _make_node(**SIM_ENGAGE)
+    try:
+        assert node.status()["engaged"] is False
+        node._on_observation(_observation())
+        assert node.status()["engaged"] is True
+        node._infer()
+        node._tick()
+        assert len(node._pub.messages) == 1
+    finally:
+        node.destroy_node()
+
+
+def test_engage_on_start_engages_once_so_a_disengage_holds(ros):
+    node = _make_node(**SIM_ENGAGE)
+    try:
+        node._on_observation(_observation())
+        node._on_enable(Bool(data=False))
+        node._on_observation(_observation())
+        assert node.status()["engaged"] is False
+    finally:
+        node.destroy_node()
+
+
+def _partial_observation():
+    message = _observation()
+    message.name = message.name[:-1]
+    message.position = message.position[:-1]
+    return message
+
+
+def _non_finite_observation():
+    message = _observation()
+    message.position[3] = math.nan
+    return message
+
+
+@pytest.mark.parametrize("invalid", [_partial_observation, _non_finite_observation])
+def test_engage_on_start_waits_for_a_complete_finite_observation(ros, invalid):
+    node = _make_node(**SIM_ENGAGE)
+    try:
+        node._on_observation(invalid())
+        assert node.status()["engaged"] is False
+        node._on_observation(_observation())
+        assert node.status()["engaged"] is True
+    finally:
+        node.destroy_node()
+
+
+@pytest.mark.parametrize("missing", ["use_sim_time", "sim_only"])
+def test_engage_on_start_is_refused_without_both_sim_guards(ros, missing):
+    node = _make_node(**{**SIM_ENGAGE, missing: False})
+    try:
+        node._on_observation(_observation())
+        node._infer()
+        node._tick()
+        assert node.status()["engaged"] is False
+        assert node._pub.messages == []
+    finally:
+        node.destroy_node()
+
+
+class _HookedLock:
+    """The node's lock, running ``hook`` once right after a release."""
+
+    def __init__(self, lock):
+        self.lock = lock
+        self.hook = None
+
+    def __enter__(self):
+        return self.lock.__enter__()
+
+    def __exit__(self, *exc):
+        self.lock.__exit__(*exc)
+        hook, self.hook = self.hook, None
+        if hook:
+            hook()
+
+
+def test_a_disengage_landing_right_after_the_one_shot_holds(ros):
+    node = _make_node(**SIM_ENGAGE)
+    try:
+        lock = node._lock = _HookedLock(node._lock)
+        # The operator's disengage arrives as soon as the observation releases the
+        # lock: any engage the one-shot did after that release would overrule it.
+        lock.hook = lambda: node._on_enable(Bool(data=False))
+        node._on_observation(_observation())
+        assert node.status()["engaged"] is False
+        node._on_observation(_observation())
+        assert node.status()["engaged"] is False
+    finally:
+        node.destroy_node()
+
+
+def test_an_operator_gate_message_cancels_a_pending_one_shot(ros):
+    node = _make_node(**SIM_ENGAGE)
+    try:
+        node._on_enable(Bool(data=False))
+        node._on_observation(_observation())
+        assert node.status()["engaged"] is False
+    finally:
+        node.destroy_node()
