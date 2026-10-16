@@ -15,10 +15,17 @@ the gate. That touches this server only; nothing is published on any ``enable``
 topic. With ``use_sim:=false`` it stays disengaged, as
 ``policy.launch.py`` leaves it.
 
+An engaged server's commands reach anything on the same DDS domain, so
+``use_sim:=true`` refuses to start unless discovery is host-local:
+``ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`` (the fm-sim agent's default) or
+``ROS_LOCALHOST_ONLY=1``. This is the check fm-robot's OpenArm sim Servo launch makes.
+
 Like ``policy.launch.py``, this starts no MoveIt Servo: the server's JointJog output
-reaches the arm only through a Servo the run brings up elsewhere.
+reaches the arm through the Servo that the run starts for the entry's ``servo``
+role.
 """
 
+import os
 import re
 
 from fm_teleop_policy.profile import load_profile
@@ -39,6 +46,19 @@ def _checked_name(argument, value):
     return value
 
 
+def check_host_local(environ):
+    """Raise unless ``environ`` keeps ROS discovery on this host."""
+    if environ.get("ROS_AUTOMATIC_DISCOVERY_RANGE") == "LOCALHOST":
+        return
+    if environ.get("ROS_LOCALHOST_ONLY") == "1":
+        return
+    raise RuntimeError(
+        "refusing to engage on start: set ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST or "
+        "ROS_LOCALHOST_ONLY=1, or the engaged server is reachable from any host on "
+        "this DDS domain"
+    )
+
+
 def _launch_setup(context):
     use_sim = LaunchConfiguration("use_sim").perform(context)
     if use_sim not in USE_SIM_VALUES:
@@ -51,6 +71,8 @@ def _launch_setup(context):
     load_profile(robot_profile)
 
     in_sim = use_sim == "true"
+    if in_sim:
+        check_host_local(os.environ)
     return [
         Node(
             package="fm_teleop_policy",

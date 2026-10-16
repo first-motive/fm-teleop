@@ -3,7 +3,10 @@
 ``catalog.schema.json`` is a verbatim copy of fm-sim's
 ``fm_sim_bringup/schema/catalog.schema.json`` at commit
 262e6290a424637da6b0f3262f403ea13acefa37 (first-motive/fm-sim#41). It is vendored
-because this repo's CI does not build fm-sim; refresh it when that schema changes.
+because this repo's CI does not build fm-sim. Only its ``controller`` definition
+(and the ``share_file`` and ``entry`` definitions it references) is used here, so
+later fm-sim changes to other definitions, such as robot ``launch_roles``, do not
+affect these tests; refresh the copy when the controller definition changes.
 Each check below is one fm-sim's ``catalog.load`` makes on every entry it reads.
 """
 
@@ -20,7 +23,7 @@ PACKAGE = "fm_teleop_policy"
 RESOURCE_TYPE = "fm_sim.controllers"
 SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "catalog.schema.json")
 # Entry name -> whether run.launch.py may start it.
-EXPECTED = {"policy_serve": False, "fastwam": False}
+EXPECTED = {"policy_serve": True, "fastwam": False}
 
 
 def _ours():
@@ -74,10 +77,11 @@ def test_policy_serve_launch_is_installed():
     )
 
 
-def test_policy_serve_needs_the_trajectory_role():
-    # Servo streams the profile's trajectory_controller (fm_openarm_v2:
-    # openarm_*_arm_controller), which the openarm robot entry files under this role.
-    assert _load("policy_serve")["activate"] == ["arm_trajectory"]
+def test_policy_serve_needs_servo_and_the_trajectory_role():
+    # The server's JointJog reaches the arm only through MoveIt Servo (the robot's
+    # servo role), which streams the profile's trajectory_controller (fm_openarm_v2:
+    # openarm_*_arm_controller), filed by the openarm robot entry under arm_trajectory.
+    assert _load("policy_serve")["activate"] == ["arm_trajectory", "servo"]
 
 
 def test_fastwam_is_a_placeholder():

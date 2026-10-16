@@ -119,20 +119,32 @@ share path of its entry yaml in `catalog/controllers/`.
 
 | Entry | Available | Launch | Why |
 |-------|-----------|--------|-----|
-| `policy_serve` | no | `launch/sim.launch.py` | Its JointJog output needs MoveIt Servo on `/servo_node`, and no Jazzy sim role starts Servo yet |
-| `fastwam` | no | none | World-action-model placeholder; no controller code exists |
+| `policy_serve` | yes | `launch/sim.launch.py` | Activates `arm_trajectory` and `servo`: the robot's servo role starts MoveIt Servo on `/servo_node`, which carries the server's JointJog output to the arm's trajectory controller |
+| `fastwam` | no | none | World-action-model placeholder; no model or controller code exists |
 
-`run.launch.py` lists both and refuses to start either. `sim.launch.py` takes the
-three arguments a run passes: `use_sim` (default `false`), `robot_profile`
-(required), and `scenario`. It rejects a malformed or unknown value before anything
-starts, and starts the server alone, with the zero policy and the right arm. With
-`use_sim:=true` it sets `use_sim_time` and `engage_on_start` on the server, because
-a sim run has no operator to hold the gate. It always sets `sim_only`. With
-`use_sim:=false` the server stays disengaged.
+`run.launch.py` lists both, starts `policy_serve` and refuses `fastwam`. For example:
+
+```bash
+ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST ros2 launch fm_sim_bringup run.launch.py \
+  backend:=mujoco robot:=openarm scenario:=empty controller:=policy_serve
+```
+
+The OpenArm servo role is sim-only and refuses to start unless ROS discovery is
+host-local, which the fm-sim agent sets by default (`--dds-range`); with any other
+range the run fails.
+
+`sim.launch.py` takes the three arguments a run passes: `use_sim` (default
+`false`), `robot_profile` (required), and `scenario`. It rejects a malformed or
+unknown value before anything starts, and starts the server alone, with the zero
+policy and the right arm. With `use_sim:=true` it sets `use_sim_time` and
+`engage_on_start` on the server, because a sim run has no operator to hold the gate,
+and it refuses to start unless discovery is host-local
+(`ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST` or `ROS_LOCALHOST_ONLY=1`). It always
+sets `sim_only`. With `use_sim:=false` the server stays disengaged.
 
 `test/catalog.schema.json` is a copy of fm-sim's catalog schema, because this repo's
 CI does not build fm-sim. `test/test_catalog.py` names the fm-sim commit it came
-from.
+from and validates only controller entries against it.
 
 ## Parameters
 

@@ -1,7 +1,9 @@
 # Catalog entry (fm_sim.controllers): a placeholder for the world-action-model
 # controller. No code exists yet, so run.launch.py refuses it.
 name: fastwam
-description: World-action-model controller; placeholder, no controller code yet
+description: >-
+  World-action-model (WAM) controller; placeholder only, no model or controller
+  code exists yet
 available: false
 activate: []
 launch: null
