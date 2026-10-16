@@ -48,8 +48,8 @@ a single input node, not the full teleop pipeline. The complete Servo teleop run
 (MoveIt Servo plus a sim or robot target) is driven by the
 [`fm-app`](https://github.com/first-motive/fm-app) launcher
 (`ros2 launch fm_bringup teleop.launch.py`); fm-teleop carries no launch files of
-its own, apart from `fm_teleop_policy`'s server-only launch, so standalone scope
-ends at the input node.
+its own, apart from `fm_teleop_policy`'s server-only launches (one standalone, one
+included by an fm-sim run), so standalone scope ends at the input node.
 
 The host OS picks the path, overridable with `--native` / `--container`:
 

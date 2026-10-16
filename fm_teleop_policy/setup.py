@@ -13,6 +13,15 @@ setup(
         ("share/" + package_name, ["package.xml"]),
         ("share/" + package_name + "/launch", glob("launch/*.launch.py")),
         ("share/" + package_name + "/robot_profiles", glob("robot_profiles/*.yaml")),
+        # fm-sim catalog: each marker's content is its entry yaml's share path.
+        (
+            "share/ament_index/resource_index/fm_sim.controllers",
+            glob("resource/fm_sim.controllers/*"),
+        ),
+        (
+            "share/" + package_name + "/catalog/controllers",
+            glob("catalog/controllers/*.yaml"),
+        ),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
