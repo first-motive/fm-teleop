@@ -51,6 +51,18 @@ jobs:
       package-prefix: ""
       rosdep-strict: false
 
+  # fm_teleop_policy serves policies to the Jazzy sim and controller stack, so the
+  # repo is also built and tested on Jazzy. Humble stays the lane every other
+  # package targets until the repo moves as a whole.
+  build-test-jazzy:
+    uses: first-motive/.github/.github/workflows/ros2-build-test.yml@main
+    with:
+      distro: jazzy
+      checkout-path: src/fm-teleop
+      repos-file: fm-teleop.repos
+      package-prefix: ""
+      rosdep-strict: false
+
   # fm_teleop_so101 is a uv project, not a ROS package (COLCON_IGNORE), so the
   # colcon job above never sees it. Its suite runs LeRobot's real loop and
   # dataset writer against stand-in arms, so it needs no hardware.

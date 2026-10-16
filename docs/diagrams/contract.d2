@@ -13,6 +13,7 @@ mirror: mirror_source { class: node }
 panel: "Foxglove panel" { class: node }
 leader: leader_source { class: node }
 vr: vr_source { class: node }
+policy: policy_server { class: node }
 hand: g1_hand_teleop { class: node }
 
 arm_twist: /servo_node/delta_twist_cmds { class: topic }
@@ -42,6 +43,7 @@ leader -> arm_traj
 vr -> arm_twist
 vr -> base_twist
 vr -> hand_ch
+policy -> arm_joint
 
 arm_twist -> servo
 arm_joint -> servo
