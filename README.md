@@ -18,6 +18,7 @@ with the other six package repos by
 | `fm_teleop_msgs` | ament_cmake | Perception interfaces (`HandSkeleton`, `HandQuality`) |
 | `fm_teleop_device` | ament_python | Gamepad / handheld device input |
 | `fm_teleop_leader` | ament_python | Leader-arm input (leader joints drive the follower) |
+| `fm_teleop_policy` | ament_python | Policy input: a trained checkpoint drives the arm behind an engage gate (builds on Humble and Jazzy; Jazzy is the target) |
 | `fm_teleop_vr` | ament_python | VR controller input (pose, stick, grip) |
 | `fm_teleop_vision` | ament_python | Vision-based input |
 | `fm_teleop_panel` | npm | Foxglove operator panel |
@@ -47,7 +48,8 @@ a single input node, not the full teleop pipeline. The complete Servo teleop run
 (MoveIt Servo plus a sim or robot target) is driven by the
 [`fm-app`](https://github.com/first-motive/fm-app) launcher
 (`ros2 launch fm_bringup teleop.launch.py`); fm-teleop carries no launch files of
-its own, so standalone scope ends at the input node.
+its own, apart from `fm_teleop_policy`'s server-only launch, so standalone scope
+ends at the input node.
 
 The host OS picks the path, overridable with `--native` / `--container`:
 
