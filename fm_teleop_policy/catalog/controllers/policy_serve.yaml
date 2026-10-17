@@ -1,14 +1,13 @@
 # Catalog entry (fm_sim.controllers): fm_teleop_policy's server drives the right arm
 # through the teleop contract's arm_joint channel (JointJog on
-# /servo_node/delta_joint_cmds). That channel needs MoveIt Servo, which streams the
-# arm's joint trajectory controller; no sim role starts Servo on Jazzy yet, so the
-# entry is listed but refused until one does.
+# /servo_node/delta_joint_cmds). The robot's servo role starts MoveIt Servo, which
+# streams those commands to the arm's joint trajectory controller (arm_trajectory).
 name: policy_serve
 description: >-
-  Trained policy over the robot profile's right arm (zero policy by default).
-  Not available: needs MoveIt Servo on /servo_node, which no Jazzy sim role starts yet
-available: false
-activate: [arm_trajectory]
+  Trained policy over the robot profile's right arm through MoveIt Servo (zero
+  policy by default); engages itself on sim time
+available: true
+activate: [arm_trajectory, servo]
 launch:
   package: fm_teleop_policy
   path: launch/sim.launch.py

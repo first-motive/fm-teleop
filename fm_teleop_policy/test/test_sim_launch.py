@@ -25,6 +25,18 @@ def sim_launch():
     return module
 
 
+@pytest.fixture
+def host_local(monkeypatch):
+    monkeypatch.setenv("ROS_AUTOMATIC_DISCOVERY_RANGE", "LOCALHOST")
+    monkeypatch.delenv("ROS_LOCALHOST_ONLY", raising=False)
+
+
+@pytest.fixture
+def not_host_local(monkeypatch):
+    monkeypatch.setenv("ROS_AUTOMATIC_DISCOVERY_RANGE", "SUBNET")
+    monkeypatch.delenv("ROS_LOCALHOST_ONLY", raising=False)
+
+
 def _declared(sim_launch):
     return {
         action.name: action
@@ -70,7 +82,9 @@ def test_use_sim_defaults_to_false_and_robot_profile_is_required(sim_launch):
     assert declared["robot_profile"].default_value is None
 
 
-def test_by_default_the_server_runs_on_wall_time_and_stays_disengaged(sim_launch):
+def test_by_default_the_server_runs_on_wall_time_and_stays_disengaged(
+    sim_launch, not_host_local
+):
     context, (node,) = _setup(sim_launch, robot_profile="fm_openarm_v2")
     assert isinstance(node, Node)
     assert node.node_package == "fm_teleop_policy"
@@ -83,7 +97,7 @@ def test_by_default_the_server_runs_on_wall_time_and_stays_disengaged(sim_launch
     }
 
 
-def test_a_sim_run_engages_the_server_through_its_own_parameter(sim_launch):
+def test_a_sim_run_engages_the_server_through_its_own_parameter(sim_launch, host_local):
     context, (node,) = _setup(sim_launch, use_sim="true", robot_profile="fm_openarm_v2")
     assert _parameters(node, context) == {
         "robot_profile": "fm_openarm_v2",
@@ -94,12 +108,31 @@ def test_a_sim_run_engages_the_server_through_its_own_parameter(sim_launch):
 
 
 @pytest.mark.parametrize("use_sim", ["true", "false"])
-def test_nothing_but_the_server_is_started(sim_launch, use_sim):
+def test_nothing_but_the_server_is_started(sim_launch, host_local, use_sim):
     # Engaging by publishing on an enable topic could reach another server on a
     # shared graph; the only action is this server's own node.
     _, actions = _setup(sim_launch, use_sim=use_sim, robot_profile="fm_openarm_v2")
     # Exact type: a plain ExecuteProcess (say a `ros2 topic pub`) would not match Node.
     assert [type(action) for action in actions] == [Node]
+
+
+@pytest.mark.parametrize("range_", ["SUBNET", "OFF", "SYSTEM_DEFAULT", None])
+def test_a_sim_run_refuses_to_engage_unless_discovery_is_host_local(
+    sim_launch, monkeypatch, range_
+):
+    monkeypatch.delenv("ROS_LOCALHOST_ONLY", raising=False)
+    if range_ is None:
+        monkeypatch.delenv("ROS_AUTOMATIC_DISCOVERY_RANGE", raising=False)
+    else:
+        monkeypatch.setenv("ROS_AUTOMATIC_DISCOVERY_RANGE", range_)
+    with pytest.raises(RuntimeError, match="refusing to engage on start"):
+        _setup(sim_launch, use_sim="true", robot_profile="fm_openarm_v2")
+
+
+def test_a_sim_run_accepts_ros_localhost_only(sim_launch, not_host_local, monkeypatch):
+    monkeypatch.setenv("ROS_LOCALHOST_ONLY", "1")
+    context, (node,) = _setup(sim_launch, use_sim="true", robot_profile="fm_openarm_v2")
+    assert _parameters(node, context)["engage_on_start"] is True
 
 
 @pytest.mark.parametrize("value", ["", "True", "yes", "1"])
