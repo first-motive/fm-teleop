@@ -18,7 +18,7 @@ arms:
     arm_controller: openarm_right_forward_position_controller
     trajectory_controller: openarm_right_arm_controller
     ee_frame: openarm_right_grasp_frame
-    hand_frame: openarm_right_ee_base_link
+    hand_frame: openarm_right_hand
   left:
     joints:
       - openarm_left_joint1
@@ -32,4 +32,4 @@ arms:
     arm_controller: openarm_left_forward_position_controller
     trajectory_controller: openarm_left_arm_controller
     ee_frame: openarm_left_grasp_frame
-    hand_frame: openarm_left_ee_base_link
+    hand_frame: openarm_left_hand
