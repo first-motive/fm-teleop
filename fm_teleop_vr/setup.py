@@ -16,6 +16,7 @@ setup(
     maintainer_email="nish@ubundi.co.za",
     description="Teleop source: VR controllers (pose -> arm, stick -> base, grip -> hand)",
     license="Apache-2.0",
+    extras_require={"test": ["pytest"]},
     entry_points={
         "console_scripts": [
             "vr_source = fm_teleop_vr.vr_source:main",

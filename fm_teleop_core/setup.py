@@ -16,6 +16,7 @@ setup(
     maintainer_email="nish@ubundi.co.za",
     description="Teleop source layer: TeleopSource base node, command contract, and retarget utilities",
     license="Apache-2.0",
+    extras_require={"test": ["pytest"]},
     entry_points={
         "console_scripts": [],
     },
