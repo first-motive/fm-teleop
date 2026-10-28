@@ -28,7 +28,7 @@ setup(
     maintainer_email="nish@ubundi.co.za",
     description="Teleop source: vision wrist-tracking (MediaPipe) -> arm twist",
     license="Apache-2.0",
-    tests_require=["pytest"],
+    extras_require={"test": ["pytest"]},
     entry_points={
         "console_scripts": [
             "vision_source = fm_teleop_vision.vision_source:main",
