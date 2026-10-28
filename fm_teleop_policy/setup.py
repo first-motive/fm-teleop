@@ -29,7 +29,6 @@ setup(
     maintainer_email="nish@ubundi.co.za",
     description="Teleop source: a trained policy drives the arm through the command contract",
     license="Apache-2.0",
-    tests_require=["pytest"],
     entry_points={
         "console_scripts": [
             "policy_server = fm_teleop_policy.server:main",

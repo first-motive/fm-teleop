@@ -20,7 +20,6 @@ setup(
     maintainer_email="nish@ubundi.co.za",
     description="Teleop source: leader-arm follow (leader joints -> follower controller)",
     license="Apache-2.0",
-    tests_require=["pytest"],
     entry_points={
         "console_scripts": [
             "leader_source = fm_teleop_leader.leader_source:main",

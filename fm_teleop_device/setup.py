@@ -16,7 +16,6 @@ setup(
     maintainer_email="nish@ubundi.co.za",
     description="Teleop sources for physical devices: gamepad, SpaceMouse, and the G1-D hand mapper",
     license="Apache-2.0",
-    tests_require=["pytest"],
     entry_points={
         "console_scripts": [
             "joy_to_servo = fm_teleop_device.joy_to_servo:main",
