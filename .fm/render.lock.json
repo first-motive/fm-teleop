@@ -2,7 +2,7 @@
   "_fm_render": {
     "artifact": "render-lock",
     "origin": "rendered by the First Motive render plane \u2014 edit the upstream source, not this file",
-    "sha256": "fe2573a859487f5ca44c5b8583b0ff1765135b866806975ffb7cb5c7170693c0"
+    "sha256": "31c40aec06a48be2680279f2fa4e5c48157a91da047ae0e201b3325b339adbd4"
   },
   "artifacts": {
     "agents-invariants": {
@@ -10,7 +10,7 @@
       "paths": [
         "AGENTS.md"
       ],
-      "sha256": "0725d9687ad94ff0421993d070be039b4bef26b9cb06b68a8e7469aa9c0ceae9",
+      "sha256": "311959fea747960e045bbf2fcf4e3314930fe25555e9df4931c97b4c0f7017f0",
       "stamp": "html"
     },
     "bootstrap-load-lib": {
@@ -60,7 +60,7 @@
         "install.sh",
         "run.sh"
       ],
-      "sha256": "5de9c0a921c441407f1aea8b6e32f37ca9d3f654d1116c636f0a7136da03b7d2",
+      "sha256": "df76d6b982d50c5ee6969e85e12baa59ead56c3665a6bc598bdc5f0ccbe95630",
       "stamp": "sh"
     },
     "pre-push-hook": {
