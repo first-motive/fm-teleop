@@ -553,3 +553,10 @@ def test_an_operator_gate_message_cancels_a_pending_one_shot(ros):
         assert node.status()["engaged"] is False
     finally:
         node.destroy_node()
+
+
+@pytest.mark.parametrize("name", ["rate_hz", "inference_rate_hz", "status_rate_hz"])
+@pytest.mark.parametrize("rate", [0.0, -5.0])
+def test_refuses_a_rate_that_is_not_positive(ros, name, rate):
+    with pytest.raises(ValueError, match=f"^{name} must be > 0"):
+        _make_node(**{name: rate})

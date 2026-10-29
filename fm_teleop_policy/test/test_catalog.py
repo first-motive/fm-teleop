@@ -2,9 +2,10 @@
 
 ``catalog.schema.json`` is a verbatim copy of fm-sim's
 ``fm_sim_bringup/schema/catalog.schema.json`` at commit
-262e6290a424637da6b0f3262f403ea13acefa37 (first-motive/fm-sim#41). It is vendored
-because this repo's CI does not build fm-sim. Only its ``controller`` definition
-(and the ``share_file`` and ``entry`` definitions it references) is used here, so
+4721f383019afbaeea1e087ddb224918f4f76d88 (first-motive/fm-sim#106, run params).
+It is vendored because this repo's CI does not build fm-sim. Only its
+``controller`` definition (and the ``share_file``, ``entry``, ``param`` and
+``param_target`` definitions it references) is used here, so
 later fm-sim changes to other definitions, such as robot ``launch_roles``, do not
 affect these tests; refresh the copy when the controller definition changes.
 Each check below is one fm-sim's ``catalog.load`` makes on every entry it reads.
@@ -17,7 +18,10 @@ from ament_index_python.packages import get_package_share_directory
 from ament_index_python.resources import get_resource, get_resources
 import jsonschema
 import pytest
+import rclpy
 import yaml
+
+from fm_teleop_policy.server import PolicyServer
 
 PACKAGE = "fm_teleop_policy"
 RESOURCE_TYPE = "fm_sim.controllers"
@@ -88,3 +92,60 @@ def test_fastwam_is_a_placeholder():
     entry = _load("fastwam")
     assert entry["launch"] is None
     assert entry["activate"] == []
+
+
+def test_policy_serve_tunable_defaults_lie_within_their_bounds():
+    for name, param in _load("policy_serve")["params"].items():
+        assert param["min"] <= param["default"] <= param["max"], name
+
+
+def test_policy_serve_tunables_target_the_servers_own_parameters():
+    # Each target must name a parameter the server declares, with the same default,
+    # or a run's override would be silently ignored or move the unedited baseline.
+    rclpy.init()
+    try:
+        server = PolicyServer()
+        for name, param in _load("policy_serve")["params"].items():
+            target = param["target"]
+            assert target["kind"] == "ros_param", name
+            assert target["node"] == server.get_fully_qualified_name(), name
+            assert server.get_parameter(target["param"]).value == param["default"], name
+        server.destroy_node()
+    finally:
+        rclpy.shutdown()
+
+
+def _without(param, *keys):
+    return {key: value for key, value in param.items() if key not in keys}
+
+
+RATE = {
+    "label": "Rate", "type": "float", "default": 1.0, "min": 0.5, "max": 2.0,
+    "target": {"kind": "ros_param", "node": "/policy_server", "param": "rate_hz"},
+}
+MODE = {**_without(RATE, "min", "max"), "type": "enum", "default": "a", "enum": ["a"]}
+GAINS = {**RATE, "type": "array", "items": "float", "length": 2, "default": [1.0, 1.0]}
+
+
+def test_the_schema_fixtures_are_valid(controller_schema):
+    entry = _load("policy_serve")
+    entry["params"] = {"rate": RATE, "mode": MODE, "gains": GAINS}
+    jsonschema.validate(entry, controller_schema)
+
+
+@pytest.mark.parametrize("param", [
+    pytest.param({**RATE, "target": {"kind": "topic", "name": "/x"}}, id="unknown-target-kind"),
+    pytest.param(_without(RATE, "min"), id="float-without-min"),
+    pytest.param(_without(MODE, "enum"), id="enum-without-enum"),
+    pytest.param(_without(GAINS, "length"), id="array-without-length"),
+    pytest.param({**RATE, "step": 0}, id="zero-step"),
+    pytest.param(
+        {**RATE, "target": {**RATE["target"], "node": "policy_server"}},
+        id="node-not-fully-qualified",
+    ),
+])
+def test_the_schema_refuses_a_malformed_tunable(controller_schema, param):
+    entry = _load("policy_serve")
+    entry["params"] = {"rate": param}
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(entry, controller_schema)

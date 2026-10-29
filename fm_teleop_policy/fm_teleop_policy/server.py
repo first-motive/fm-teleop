@@ -62,6 +62,15 @@ class PolicyServer(TeleopSource):
             "inference_rate_hz", 10.0, "Model cadence: fills the action chunk."))
         status_rate_hz = float(self._declare(
             "status_rate_hz", 1.0, "Status line cadence."))
+        for name, rate in (
+            ("rate_hz", rate_hz),
+            ("inference_rate_hz", inference_rate_hz),
+            ("status_rate_hz", status_rate_hz),
+        ):
+            # Each rate becomes a timer period; refuse it here, by name, rather than
+            # with a ZeroDivisionError or a negative period.
+            if not rate > 0.0:
+                raise ValueError(f"{name} must be > 0, got {rate}.")
         self._chunk_timeout = float(self._declare(
             "chunk_timeout", 1.0,
             "Seconds an unrefilled chunk stays publishable before the node goes quiet."))
