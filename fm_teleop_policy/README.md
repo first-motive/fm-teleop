@@ -133,9 +133,14 @@ The OpenArm servo role is sim-only and refuses to start unless ROS discovery is
 host-local, which the fm-sim agent sets by default (`--dds-range`); with any other
 range the run fails.
 
-`sim.launch.py` takes the three arguments a run passes: `use_sim` (default
-`false`), `robot_profile` (required), and `scenario`. It rejects a malformed or
-unknown value before anything starts, and starts the server alone, with the zero
+`sim.launch.py` takes the arguments a run passes: `use_sim` (default
+`false`), `robot_profile` (required), `scenario`, and `params_file` (default
+empty). A non-empty `params_file` is applied after the server's parameters, so the
+run's overrides win. The launch then re-asserts what a run must not change: the
+engage gates, `use_sim_time`, the topics, the policy, the arm, and the profile.
+`policy.launch.py` takes no `params_file`: no catalog entry starts it, so no run
+override reaches it. `sim.launch.py` rejects a malformed or unknown value before
+anything starts, and starts the server alone, with the zero
 policy and the right arm. With `use_sim:=true` it sets `use_sim_time` and
 `engage_on_start` on the server, because a sim run has no operator to hold the gate,
 and it refuses to start unless discovery is host-local

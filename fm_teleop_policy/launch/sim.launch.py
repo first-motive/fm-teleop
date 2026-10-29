@@ -1,14 +1,18 @@
 """Start the policy server inside an fm-sim run, as the ``policy_serve`` controller.
 
 fm-sim's ``run.launch.py`` includes this file for the ``policy_serve`` catalog entry
-(``catalog/controllers/policy_serve.yaml``) and passes exactly three arguments:
+(``catalog/controllers/policy_serve.yaml``) and passes these arguments:
 
     use_sim        'true' | 'false' (default 'false'); sets the server's use_sim_time
     robot_profile  required; the robot entry's profile, e.g. fm_openarm_v2
     scenario       the scenario name; validated, otherwise unused by the server
+    params_file    optional; the run's ROS params file, applied after the server's
+                   parameters so the run's overrides win (ROS applies them last-wins),
+                   except the gates, topics, policy, arm and profile, which this
+                   launch re-asserts after it
 
-The server drives the profile's right arm with the zero policy (the run contract
-carries no caller parameters yet). The server is always started
+The server drives the profile's right arm with the zero policy; a run's
+``params_file`` tunes its rates and timeouts, not which policy or arm. The server is always started
 with ``sim_only``. With ``use_sim:=true`` it also gets ``engage_on_start``, so it
 engages itself on its first valid observation: a sim run has no operator to hold
 the gate. That touches this server only; nothing is published on any ``enable``
@@ -27,7 +31,11 @@ role.
 
 import os
 import re
+import tempfile
 
+import yaml
+
+from fm_teleop_core import contract
 from fm_teleop_policy.profile import load_profile
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
@@ -37,6 +45,19 @@ from launch_ros.actions import Node
 # Same rule fm-sim applies to every name that becomes a path, topic or frame.
 NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 USE_SIM_VALUES = ("true", "false")
+NODE_NAME = "policy_server"
+# Server parameters a run's params_file must never change: the policy, arm and
+# topics this launch relies on (stated here, as the server's defaults, so they can be
+# pinned) and the gates. Re-asserted after params_file, which ROS applies last-wins.
+PINNED = {
+    "arm": "right",
+    "policy_type": "zero",
+    "checkpoint": "",
+    "observation_topic": "/joint_states",
+    "command_topic": contract.ARM_JOINT.topic,
+    "enable_topic": "~/enable",
+    "status_topic": "~/status",
+}
 
 
 def _checked_name(argument, value):
@@ -59,6 +80,17 @@ def check_host_local(environ):
     )
 
 
+def _guard_file(values):
+    """Write ``values`` as a params file keyed by the server's own name."""
+    # Not a dict: launch_ros files a dict under /**, and rcl lets a node-keyed entry
+    # (as in a run's params_file) win over /** whatever the file order.
+    with tempfile.NamedTemporaryFile(
+        "w", prefix=f"{NODE_NAME}_guard_", suffix=".yaml", delete=False
+    ) as handle:
+        yaml.safe_dump({f"/{NODE_NAME}": {"ros__parameters": values}}, handle)
+    return handle.name
+
+
 def _launch_setup(context):
     use_sim = LaunchConfiguration("use_sim").perform(context)
     if use_sim not in USE_SIM_VALUES:
@@ -73,21 +105,24 @@ def _launch_setup(context):
     in_sim = use_sim == "true"
     if in_sim:
         check_host_local(os.environ)
+    owned = {
+        "robot_profile": robot_profile,
+        "use_sim_time": in_sim,
+        "engage_on_start": in_sim,
+        # The server's second engage guard; set here by convention, not enforced.
+        "sim_only": True,
+    }
+    params_file = LaunchConfiguration("params_file").perform(context)
+    parameters = [owned]
+    if params_file:
+        parameters += [params_file, _guard_file({**owned, **PINNED})]
     return [
         Node(
             package="fm_teleop_policy",
             executable="policy_server",
-            name="policy_server",
+            name=NODE_NAME,
             output="screen",
-            parameters=[
-                {
-                    "robot_profile": robot_profile,
-                    "use_sim_time": in_sim,
-                    "engage_on_start": in_sim,
-                    # The server's second engage guard; set here by convention, not enforced.
-                    "sim_only": True,
-                }
-            ],
+            parameters=parameters,
         )
     ]
 
@@ -106,6 +141,11 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "scenario", default_value="empty",
                 description="Scenario of the run; validated, not used by the server.",
+            ),
+            DeclareLaunchArgument(
+                "params_file", default_value="",
+                description="Optional ROS params file appended last to every node, "
+                "so its values win.",
             ),
             OpaqueFunction(function=_launch_setup),
         ]

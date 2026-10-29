@@ -1,7 +1,8 @@
 """The sim include launch, loaded from the installed share and set up as fm-sim would.
 
-fm-sim's run.launch.py includes it with ``use_sim``, ``robot_profile`` and
-``scenario``; these tests drive its setup function with those arguments.
+fm-sim's run.launch.py includes it with ``use_sim``, ``robot_profile``,
+``scenario`` and ``params_file``; these tests drive its setup function with those
+arguments.
 """
 
 import importlib.util
@@ -11,7 +12,10 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchContext
 from launch_ros.actions import Node
 import pytest
+import rclpy
 import yaml
+
+from fm_teleop_policy.server import PolicyServer
 
 
 @pytest.fixture(scope="module")
@@ -55,7 +59,8 @@ def _setup(sim_launch, **arguments):
     return context, sim_launch._launch_setup(context)
 
 
-def _parameters(node, context):
+def _expanded_files(node, context):
+    """Return the parameter files launch_ros passes the node, in order."""
     # launch_ros has no public getter for a node's parameters. It writes dict
     # parameters to a yaml file and records it in a private field, read here.
     node._perform_substitutions(context)
@@ -64,16 +69,26 @@ def _parameters(node, context):
         "launch_ros no longer has Node.__expanded_parameter_arguments; "
         "update this helper for the installed launch_ros"
     )
+    assert all(is_file for _, is_file in expanded)
+    return [path for path, _ in expanded]
+
+
+def _parameters(node, context):
     parameters = {}
-    for path, is_file in expanded:
-        assert is_file
+    for path in _expanded_files(node, context):
         with open(path) as handle:
             parameters.update(yaml.safe_load(handle)["/**"]["ros__parameters"])
     return parameters
 
 
-def test_declares_the_three_run_arguments(sim_launch):
-    assert set(_declared(sim_launch)) == {"use_sim", "robot_profile", "scenario"}
+def test_declares_the_run_arguments(sim_launch):
+    assert set(_declared(sim_launch)) == {
+        "use_sim", "robot_profile", "scenario", "params_file"
+    }
+
+
+def test_params_file_defaults_to_empty(sim_launch):
+    assert _declared(sim_launch)["params_file"].default_value[0].text == ""
 
 
 def test_use_sim_defaults_to_false_and_robot_profile_is_required(sim_launch):
@@ -153,3 +168,72 @@ def test_refuses_a_malformed_name_without_echoing_it(sim_launch, argument, value
 def test_refuses_an_unknown_robot_profile(sim_launch):
     with pytest.raises(ValueError, match="Unknown robot profile 'no_such_robot'"):
         _setup(sim_launch, robot_profile="no_such_robot")
+
+
+
+def _server_from_files(sim_launch, tmp_path, overrides):
+    """Return the real server, built from the files the launch passes, in order."""
+    params_file = tmp_path / "params.yaml"
+    # Keyed by the node's name, as the fm-sim agent writes the run's file.
+    params_file.write_text(yaml.safe_dump(
+        {"/policy_server": {"ros__parameters": overrides}}
+    ))
+    context, (node,) = _setup(
+        sim_launch, robot_profile="fm_openarm_v2", params_file=str(params_file)
+    )
+    files = _expanded_files(node, context)
+    assert str(params_file) in files
+    # rcl, not this test, decides precedence: the server reads the files in the
+    # order launch_ros passes them.
+    arguments = ["--ros-args"]
+    for path in files:
+        arguments += ["--params-file", path]
+    return PolicyServer(cli_args=arguments)
+
+
+@pytest.fixture
+def ros():
+    rclpy.init()
+    yield
+    rclpy.shutdown()
+
+
+def test_a_params_file_override_beats_the_servers_own_value(sim_launch, tmp_path, ros):
+    server = _server_from_files(sim_launch, tmp_path, {"rate_hz": 25.0})
+    assert server.get_parameter("rate_hz").value == 25.0
+    server.destroy_node()
+
+
+def test_a_params_file_cannot_change_a_launch_owned_parameter(
+    sim_launch, tmp_path, ros, not_host_local
+):
+    # use_sim is false, so this file would let a wall-time server self-engage.
+    server = _server_from_files(sim_launch, tmp_path, {
+        "use_sim_time": True,
+        "engage_on_start": True,
+        "sim_only": False,
+        "robot_profile": "loader_openarm_v2",
+        "arm": "left",
+        "policy_type": "lerobot",
+        "checkpoint": "/elsewhere",
+        "observation_topic": "/other_states",
+        "command_topic": "/other_cmds",
+        "enable_topic": "/other_enable",
+        "status_topic": "/other_status",
+        "rate_hz": 25.0,
+    })
+    assert {
+        name: server.get_parameter(name).value
+        for name in (
+            "use_sim_time", "engage_on_start", "sim_only", "robot_profile",
+            *sim_launch.PINNED,
+        )
+    } == {
+        "use_sim_time": False,
+        "engage_on_start": False,
+        "sim_only": True,
+        "robot_profile": "fm_openarm_v2",
+        **sim_launch.PINNED,
+    }
+    assert server.get_parameter("rate_hz").value == 25.0
+    server.destroy_node()
