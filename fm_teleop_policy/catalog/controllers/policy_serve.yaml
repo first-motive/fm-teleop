@@ -11,3 +11,75 @@ activate: [arm_trajectory, servo]
 launch:
   package: fm_teleop_policy
   path: launch/sim.launch.py
+# policy_server tunables, applied through sim.launch.py's params_file. Bounds come
+# from the run they feed: Servo (fm-robot servo_sim.yaml) halts on a command older
+# than 0.1 s and streams at 50 Hz, and /joint_states arrives at the controller
+# manager's 100 Hz. Not tunable: arm and policy_type (the servo role drives the right
+# arm only, and lerobot needs a checkpoint path), topics, the profile, and the
+# engage gates.
+params:
+  rate_hz:
+    label: Control rate
+    description: Rate the server publishes actions to Servo, draining the chunk.
+    type: float
+    default: 50.0
+    # 20 Hz keeps two commands inside Servo's 0.1 s timeout; past 100 Hz (twice
+    # Servo's stream) commands are overwritten before Servo reads them.
+    min: 20.0
+    max: 100.0
+    step: 5.0
+    unit: Hz
+    target: {kind: ros_param, node: /policy_server, param: rate_hz}
+  inference_rate_hz:
+    label: Inference rate
+    description: Rate the policy is asked for a fresh action chunk.
+    type: float
+    default: 10.0
+    # Its period must stay under chunk_timeout, or chunks expire before the next
+    # arrives (1 Hz meets the default 1 s); past the control rate, chunks are
+    # replaced unread.
+    min: 1.0
+    max: 50.0
+    step: 1.0
+    unit: Hz
+    target: {kind: ros_param, node: /policy_server, param: inference_rate_hz}
+  status_rate_hz:
+    label: Status rate
+    description: Rate of the JSON status line on ~/status.
+    type: float
+    default: 1.0
+    # The status changes at most once per inference, so faster than the inference
+    # rate it repeats itself; 10 Hz is that rate's default.
+    min: 0.2
+    max: 10.0
+    step: 0.2
+    unit: Hz
+    advanced: true
+    target: {kind: ros_param, node: /policy_server, param: status_rate_hz}
+  chunk_timeout:
+    label: Chunk timeout
+    description: How long an unrefilled chunk stays publishable before the server goes quiet.
+    type: float
+    default: 1.0
+    # It must exceed the inference period, or a chunk expires before its successor
+    # (0.1 s is that period at 10 Hz); past 2 s an engaged arm keeps acting on
+    # actions inferred from a stale state.
+    min: 0.1
+    max: 2.0
+    step: 0.1
+    unit: s
+    advanced: true
+    target: {kind: ros_param, node: /policy_server, param: chunk_timeout}
+  observation_timeout:
+    label: Observation timeout
+    description: How long without a joint state before inference and publishing stop.
+    type: float
+    default: 0.5
+    # 0.05 s is five /joint_states periods at 100 Hz; past 2 s the arm acts on a
+    # state the robot left long ago.
+    min: 0.05
+    max: 2.0
+    step: 0.05
+    unit: s
+    advanced: true
+    target: {kind: ros_param, node: /policy_server, param: observation_timeout}

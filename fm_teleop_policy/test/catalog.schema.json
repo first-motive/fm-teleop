@@ -34,6 +34,35 @@
       "type": "object",
       "additionalProperties": {"type": "string"}
     },
+    "frame_name": {
+      "description": "A name that becomes an MJCF body, a marker or a frame.",
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+    },
+    "vector3": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+    "rgba": {
+      "type": "array",
+      "items": {"type": "number", "minimum": 0, "maximum": 1},
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "range": {
+      "description": "[low, high] with low <= high (checked on load).",
+      "type": "array",
+      "items": {"type": "number"},
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "pose": {
+      "description": "A pose in the world frame: position (m) and fixed-axis roll, pitch, yaw (rad).",
+      "type": "object",
+      "required": ["xyz"],
+      "additionalProperties": false,
+      "properties": {
+        "xyz": {"$ref": "#/definitions/vector3"},
+        "rpy": {"$ref": "#/definitions/vector3"}
+      }
+    },
     "entry": {
       "type": "object",
       "required": ["name", "package", "description", "available"],
@@ -41,8 +70,148 @@
         "name": {"$ref": "#/definitions/name"},
         "package": {"type": "string", "description": "The package that registered the entry."},
         "description": {"type": "string", "minLength": 1},
-        "available": {"type": "boolean", "description": "False for a listed placeholder that run.launch.py refuses."}
+        "available": {"type": "boolean", "description": "False for a listed placeholder that run.launch.py refuses. The loader also sets it false while a requires_packages package is not installed."},
+        "requires_packages": {
+          "description": "Optional packages the entry needs installed, such as a description that ships only in a private image. While any is missing the entry is listed with available false and missing_packages, and run.launch.py refuses it.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}
+        },
+        "missing_packages": {
+          "description": "Set by the loader, never in an entry yaml: the requires_packages that are not installed.",
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string"}
+        },
+        "params": {
+          "description": "Optional tunables a caller may override for one run, keyed by name; a caller names one as <dimension>.<name>. The loader also checks that min <= default <= max, an enum default is a member, an array default has its length, and an entry target's path holds the default.",
+          "type": "object",
+          "propertyNames": {"$ref": "#/definitions/name"},
+          "additionalProperties": {"$ref": "#/definitions/param"}
+        }
       }
+    },
+    "param": {
+      "description": "One tunable: how the app shows it, the values it takes, and where an override goes.",
+      "type": "object",
+      "required": ["label", "type", "default", "target"],
+      "additionalProperties": false,
+      "properties": {
+        "label": {"type": "string", "minLength": 1},
+        "description": {"type": "string", "minLength": 1},
+        "type": {"enum": ["float", "int", "bool", "enum", "array"]},
+        "default": {"description": "The value the run uses with no override; it satisfies type and bounds."},
+        "min": {"type": "number"},
+        "max": {"type": "number"},
+        "step": {"type": "number", "exclusiveMinimum": 0},
+        "unit": {"type": "string", "minLength": 1},
+        "enum": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "items": {"enum": ["float", "int"], "description": "array only: the element type."},
+        "length": {"type": "integer", "minimum": 1, "maximum": 64, "description": "array only: the fixed length; min and max bound each element."},
+        "ordered": {"type": "boolean", "description": "array only: true when the elements must ascend, as a [low, high] range does."},
+        "advanced": {"type": "boolean", "description": "True for the advanced tier; default false (basic)."},
+        "backends": {
+          "description": "Optional: the backends this tunable applies on; an override on any other is refused.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/definitions/name"}
+        },
+        "target": {"$ref": "#/definitions/param_target"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"type": {"enum": ["float", "int"]}}},
+          "then": {
+            "required": ["min", "max"],
+            "not": {"anyOf": [
+              {"required": ["enum"]}, {"required": ["items"]}, {"required": ["length"]},
+              {"required": ["ordered"]}
+            ]}
+          }
+        },
+        {
+          "if": {"properties": {"type": {"const": "array"}}},
+          "then": {"required": ["items", "length", "min", "max"], "not": {"required": ["enum"]}}
+        },
+        {
+          "if": {"properties": {"type": {"const": "enum"}}},
+          "then": {
+            "required": ["enum"],
+            "not": {"anyOf": [
+              {"required": ["min"]}, {"required": ["max"]}, {"required": ["step"]},
+              {"required": ["items"]}, {"required": ["length"]}, {"required": ["ordered"]}
+            ]}
+          }
+        },
+        {
+          "if": {"properties": {"type": {"const": "bool"}}},
+          "then": {
+            "not": {"anyOf": [
+              {"required": ["min"]}, {"required": ["max"]}, {"required": ["step"]},
+              {"required": ["enum"]}, {"required": ["items"]}, {"required": ["length"]},
+              {"required": ["ordered"]}
+            ]}
+          }
+        }
+      ]
+    },
+    "param_target": {
+      "description": "Where an override goes. ros_param: the params file appended last to every node the run starts. entry: a dotted path into this entry, a list item addressed by its name, merged before the world is built. description: a xacro arg of the robot description, or one attribute of one MJCF element after the model is compiled (mujoco only). A ros_param node is fully qualified with no wildcard, so its section ranks with node-keyed guards, never under them.",
+      "type": "object",
+      "required": ["kind"],
+      "properties": {"kind": {"enum": ["ros_param", "entry", "description"]}},
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "ros_param"}}},
+          "then": {
+            "required": ["node", "param"],
+            "additionalProperties": false,
+            "properties": {
+              "kind": true,
+              "node": {"type": "string", "pattern": "^(/[A-Za-z][A-Za-z0-9_]*)+$"},
+              "param": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"kind": {"const": "entry"}}},
+          "then": {
+            "required": ["path"],
+            "additionalProperties": false,
+            "properties": {
+              "kind": true,
+              "path": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"kind": {"const": "description"}}},
+          "then": {
+            "additionalProperties": false,
+            "oneOf": [{"required": ["xacro_arg"]}, {"required": ["mjcf"]}],
+            "properties": {
+              "kind": true,
+              "xacro_arg": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+              "mjcf": {
+                "type": "object",
+                "required": ["element", "name", "attribute"],
+                "additionalProperties": false,
+                "properties": {
+                  "element": {"enum": ["joint", "position"]},
+                  "name": {"type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"},
+                  "attribute": {"enum": ["damping", "kp", "forcerange"]}
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "backend": {
       "allOf": [
@@ -78,7 +247,29 @@
             "description_file": {"$ref": "#/definitions/share_file"},
             "description_args": {"$ref": "#/definitions/string_map"},
             "mjcf": {"type": "string", "description": "fm_sim_models registry key of the MuJoCo model."},
+            "mjcf_mount_xyz": {
+              "$ref": "#/definitions/vector3",
+              "description": "Where the MJCF model's origin sits in the description's root frame. The MuJoCo generator mounts the model there, so the MuJoCo world and the description's world coincide. Default [0, 0, 0]."
+            },
+            "mesh_roots": {
+              "description": "Mesh URI prefixes the robot's URDF uses that no package resolves (a path relative to the URDF file, a package:// name no package has), each mapped to the share directory it means. A resolved mesh must stay under its directory.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["prefix", "package", "path"],
+                "additionalProperties": false,
+                "properties": {
+                  "prefix": {"type": "string", "minLength": 1},
+                  "package": {"type": "string", "minLength": 1},
+                  "path": {"$ref": "#/definitions/relative_path"}
+                }
+              }
+            },
             "controllers_file": {"$ref": "#/definitions/share_file"},
+            "cameras_file": {
+              "$ref": "#/definitions/share_file",
+              "description": "Optional cameras file: per role (chest, wrist_right), the optical frame, rate_hz and real intrinsics, checked by fm_sim_cameras.cameras_file; each backend also refuses what it cannot render. Absent renders no cameras."
+            },
             "controller_roles": {
               "description": "Controller names by role. broadcasters always start active; a controller entry activates other roles, and the rest load inactive.",
               "type": "object",
@@ -88,7 +279,27 @@
                 "items": {"type": "string", "minLength": 1}
               }
             },
-            "robot_profile": {"type": "string", "description": "Robot profile the controllers read joint, controller and frame names from."}
+            "launch_roles": {
+              "description": "Optional nodes a controller entry activates by role, such as MoveIt Servo. run.launch.py activates each role's requires, then includes its launch with launch_args and the run's robot_description once the active spawner has exited cleanly. A name may not also be a controller role.",
+              "type": "object",
+              "propertyNames": {"$ref": "#/definitions/name"},
+              "additionalProperties": {
+                "type": "object",
+                "required": ["requires", "launch"],
+                "additionalProperties": false,
+                "properties": {
+                  "requires": {
+                    "description": "Controller roles that must be active before the launch starts.",
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {"type": "string", "minLength": 1}
+                  },
+                  "launch": {"$ref": "#/definitions/share_file"},
+                  "launch_args": {"$ref": "#/definitions/string_map"}
+                }
+              }
+            },
+            "robot_profile": {"type": ["string", "null"], "minLength": 1, "description": "Robot profile the controllers read joint, controller and frame names from; null for a robot no profile describes yet, which refuses a controller with a launch."}
           }
         }
       ]
@@ -99,10 +310,163 @@
         {
           "required": ["objects"],
           "properties": {
-            "objects": {"type": "array", "description": "Objects placed in the scene; the schema for each lands with the scenario generators."}
+            "objects": {
+              "type": "array",
+              "items": {"$ref": "#/definitions/scenario_object"},
+              "description": "Objects in the scene. Object and region names are unique (checked on load)."
+            },
+            "regions": {"type": "array", "items": {"$ref": "#/definitions/region"}},
+            "success": {"$ref": "#/definitions/success"}
           }
         }
       ]
+    },
+    "scenario_object": {
+      "type": "object",
+      "required": ["name", "shape", "size", "friction", "color", "pose"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"$ref": "#/definitions/frame_name"},
+        "shape": {"enum": ["box", "cylinder", "sphere"]},
+        "size": {
+          "description": "box: full x, y, z extents; cylinder: radius, height; sphere: radius (m).",
+          "type": "array",
+          "items": {"type": "number", "exclusiveMinimum": 0}
+        },
+        "static": {"type": "boolean", "description": "Fixed to the world: no free joint, never respawned. Default false."},
+        "mass": {"type": "number", "exclusiveMinimum": 0, "description": "kg; required unless static."},
+        "friction": {"type": "number", "exclusiveMinimum": 0, "description": "Sliding friction coefficient."},
+        "color": {"$ref": "#/definitions/rgba"},
+        "pose": {"$ref": "#/definitions/pose"},
+        "spawn": {
+          "description": "Seeded uniform offsets added to pose at every spawn (m, and rad for yaw). Not for a static object.",
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "properties": {
+            "x": {"$ref": "#/definitions/range"},
+            "y": {"$ref": "#/definitions/range"},
+            "z": {"$ref": "#/definitions/range"},
+            "yaw": {"$ref": "#/definitions/range"}
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"shape": {"const": "box"}}},
+          "then": {"properties": {"size": {"minItems": 3, "maxItems": 3}}}
+        },
+        {
+          "if": {"properties": {"shape": {"const": "cylinder"}}},
+          "then": {"properties": {"size": {"minItems": 2, "maxItems": 2}}}
+        },
+        {
+          "if": {"properties": {"shape": {"const": "sphere"}}},
+          "then": {"properties": {"size": {"minItems": 1, "maxItems": 1}}}
+        },
+        {
+          "if": {"required": ["static"], "properties": {"static": {"const": true}}},
+          "then": {"not": {"required": ["spawn"]}},
+          "else": {"required": ["mass"]}
+        }
+      ]
+    },
+    "region": {
+      "description": "A box volume in the world frame, drawn as a marker; never a body in the sim.",
+      "type": "object",
+      "required": ["name", "size", "pose", "color"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"$ref": "#/definitions/frame_name"},
+        "size": {
+          "description": "Full x, y, z extents (m).",
+          "type": "array",
+          "items": {"type": "number", "exclusiveMinimum": 0},
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "pose": {"$ref": "#/definitions/pose"},
+        "color": {"$ref": "#/definitions/rgba"}
+      }
+    },
+    "success": {
+      "description": "object_in_region: the object's origin stays inside the region, grown by tolerance on every side, for hold_s seconds, and with max_speed set moves no faster than it; the episode fails at timeout_s.",
+      "type": "object",
+      "required": ["type", "object", "region", "tolerance", "hold_s", "timeout_s"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"enum": ["object_in_region"]},
+        "object": {"$ref": "#/definitions/frame_name"},
+        "region": {"$ref": "#/definitions/frame_name"},
+        "tolerance": {"type": "number", "minimum": 0, "description": "m"},
+        "hold_s": {"type": "number", "minimum": 0},
+        "max_speed": {"type": "number", "exclusiveMinimum": 0, "description": "m/s; optional: the hold also needs the object this slow, so a held object being lowered does not count"},
+        "timeout_s": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+    "topic": {"type": "string", "pattern": "^(/[A-Za-z0-9_]+)+$"},
+    "control_descriptor": {
+      "description": "A controller's pipeline: its blocks and the edges between them. The controller's launch publishes the same file latched on /control/descriptor. Block ids are unique and every edge names one (checked on load).",
+      "type": "object",
+      "required": ["name", "blocks", "edges"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"$ref": "#/definitions/name"},
+        "blocks": {"type": "array", "minItems": 1, "items": {"$ref": "#/definitions/control_block"}},
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["from", "to"],
+            "additionalProperties": false,
+            "properties": {
+              "from": {"$ref": "#/definitions/name"},
+              "to": {"$ref": "#/definitions/name"}
+            }
+          }
+        }
+      }
+    },
+    "control_block": {
+      "description": "One stage of the pipeline. variant says what implements it; live is a topic whose rate shows the block running; sim replaces either in sim, which marks the block a sim stand-in. A state_machine block lists its states and where the current one is read.",
+      "type": "object",
+      "required": ["id", "kind", "variant"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/definitions/name"},
+        "kind": {"enum": ["perception", "state_machine", "skill", "motion"]},
+        "variant": {"type": "string", "minLength": 1},
+        "live": {"$ref": "#/definitions/topic"},
+        "sim": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "properties": {
+            "variant": {"type": "string", "minLength": 1},
+            "live": {"$ref": "#/definitions/topic"}
+          }
+        },
+        "states": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "source": {
+          "description": "A field of a message on a topic; field is a dotted path, such as feedback.phase.",
+          "type": "object",
+          "required": ["topic", "type", "field"],
+          "additionalProperties": false,
+          "properties": {
+            "topic": {"$ref": "#/definitions/topic"},
+            "type": {"type": "string", "pattern": "^[A-Za-z0-9_]+/(msg|action|srv)/[A-Za-z0-9_]+$"},
+            "field": {"type": "string", "pattern": "^[a-z_][a-z0-9_]*(\\.[a-z_][a-z0-9_]*)*$"}
+          }
+        }
+      },
+      "if": {"properties": {"kind": {"const": "state_machine"}}},
+      "then": {"required": ["states", "source"]},
+      "else": {"not": {"anyOf": [{"required": ["states"]}, {"required": ["source"]}]}}
     },
     "controller": {
       "allOf": [
@@ -113,11 +477,23 @@
             "activate": {
               "type": "array",
               "items": {"type": "string", "minLength": 1},
-              "description": "Robot controller roles this controller needs active."
+              "description": "Robot roles this controller needs active: controller_roles names or launch_roles names."
             },
             "launch": {
               "oneOf": [{"type": "null"}, {"$ref": "#/definitions/share_file"}],
               "description": "Launch file run.launch.py includes, or null for none."
+            },
+            "family": {
+              "$ref": "#/definitions/name",
+              "description": "Optional group for variants of one controller, such as fm_skills for fm_skills_classical and fm_skills_learned. Absent means the entry is its own family."
+            },
+            "control": {
+              "$ref": "#/definitions/share_file",
+              "description": "Optional control.yaml that draws the controller's pipeline, shaped by control_descriptor."
+            },
+            "control_descriptor": {
+              "$ref": "#/definitions/control_descriptor",
+              "description": "Set by the loader, which refuses it in an entry yaml: the parsed control file, named like the entry."
             }
           }
         }

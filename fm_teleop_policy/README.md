@@ -147,6 +147,11 @@ and it refuses to start unless discovery is host-local
 (`ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST` or `ROS_LOCALHOST_ONLY=1`). It always
 sets `sim_only`. With `use_sim:=false` the server stays disengaged.
 
+`policy_serve` declares five tunables under `params`, each a `ros_param` target on
+`/policy_server`: `rate_hz` and `inference_rate_hz` (basic), and `status_rate_hz`,
+`chunk_timeout` and `observation_timeout` (advanced). The entry yaml gives the
+reason for each bound. A run's overrides reach the server through `params_file`.
+
 `test/catalog.schema.json` is a copy of fm-sim's catalog schema, because this repo's
 CI does not build fm-sim. `test/test_catalog.py` names the fm-sim commit it came
 from and validates only controller entries against it.
