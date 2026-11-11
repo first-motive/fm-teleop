@@ -10,6 +10,8 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchContext
+from launch.actions import RegisterEventHandler
+from launch.event_handlers import OnShutdown
 from launch_ros.actions import Node
 import pytest
 import rclpy
@@ -123,12 +125,38 @@ def test_a_sim_run_engages_the_server_through_its_own_parameter(sim_launch, host
 
 
 @pytest.mark.parametrize("use_sim", ["true", "false"])
-def test_nothing_but_the_server_is_started(sim_launch, host_local, use_sim):
+@pytest.mark.parametrize("with_params_file", [False, True])
+def test_nothing_but_the_server_is_started(
+    sim_launch, host_local, tmp_path, use_sim, with_params_file
+):
     # Engaging by publishing on an enable topic could reach another server on a
-    # shared graph; the only action is this server's own node.
-    _, actions = _setup(sim_launch, use_sim=use_sim, robot_profile="fm_openarm_v2")
+    # shared graph; the only process is this server's own node.
+    arguments = {"use_sim": use_sim, "robot_profile": "fm_openarm_v2"}
+    if with_params_file:
+        params_file = tmp_path / "params.yaml"
+        params_file.write_text("{}")
+        arguments["params_file"] = str(params_file)
+    _, actions = _setup(sim_launch, **arguments)
     # Exact type: a plain ExecuteProcess (say a `ros2 topic pub`) would not match Node.
-    assert [type(action) for action in actions] == [Node]
+    # A params_file adds only the guard file's cleanup.
+    expected = [Node, RegisterEventHandler] if with_params_file else [Node]
+    assert [type(action) for action in actions] == expected
+
+
+def test_the_guard_file_is_removed_on_shutdown(sim_launch, tmp_path):
+    params_file = tmp_path / "params.yaml"
+    params_file.write_text("{}")
+    context, (node, cleanup) = _setup(
+        sim_launch, robot_profile="fm_openarm_v2", params_file=str(params_file)
+    )
+    guard = _expanded_files(node, context)[-1]
+    assert os.path.exists(guard)
+    handler = cleanup.event_handler
+    assert isinstance(handler, OnShutdown)
+    handler.handle(None, LaunchContext())
+    assert not os.path.exists(guard)
+    # A second shutdown, or a file already gone, is not an error.
+    handler.handle(None, LaunchContext())
 
 
 @pytest.mark.parametrize("range_", ["SUBNET", "OFF", "SYSTEM_DEFAULT", None])
@@ -178,7 +206,7 @@ def _server_from_files(sim_launch, tmp_path, overrides):
     params_file.write_text(yaml.safe_dump(
         {"/policy_server": {"ros__parameters": overrides}}
     ))
-    context, (node,) = _setup(
+    context, (node, _cleanup) = _setup(
         sim_launch, robot_profile="fm_openarm_v2", params_file=str(params_file)
     )
     files = _expanded_files(node, context)
