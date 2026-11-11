@@ -30,6 +30,7 @@ role.
 """
 
 import os
+import pathlib
 import re
 import tempfile
 
@@ -37,15 +38,16 @@ import yaml
 
 from fm_teleop_core import contract
 from fm_teleop_policy.profile import load_profile
+from fm_teleop_policy.server import FULLY_QUALIFIED_NAME, NODE_NAME
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler
+from launch.event_handlers import OnShutdown
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 # Same rule fm-sim applies to every name that becomes a path, topic or frame.
 NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 USE_SIM_VALUES = ("true", "false")
-NODE_NAME = "policy_server"
 # Server parameters a run's params_file must never change: the policy, arm and
 # topics this launch relies on (stated here, as the server's defaults, so they can be
 # pinned) and the gates. Re-asserted after params_file, which ROS applies last-wins.
@@ -81,13 +83,17 @@ def check_host_local(environ):
 
 
 def _guard_file(values):
-    """Write ``values`` as a params file keyed by the server's own name."""
+    """Write ``values`` as a params file keyed by the server's own name.
+
+    The server refuses engage_on_start under any other name, so a namespace cannot
+    leave the guard matching nothing while the server still self-engages.
+    """
     # Not a dict: launch_ros files a dict under /**, and rcl lets a node-keyed entry
     # (as in a run's params_file) win over /** whatever the file order.
     with tempfile.NamedTemporaryFile(
         "w", prefix=f"{NODE_NAME}_guard_", suffix=".yaml", delete=False
     ) as handle:
-        yaml.safe_dump({f"/{NODE_NAME}": {"ros__parameters": values}}, handle)
+        yaml.safe_dump({FULLY_QUALIFIED_NAME: {"ros__parameters": values}}, handle)
     return handle.name
 
 
@@ -114,8 +120,17 @@ def _launch_setup(context):
     }
     params_file = LaunchConfiguration("params_file").perform(context)
     parameters = [owned]
+    cleanup = []
     if params_file:
-        parameters += [params_file, _guard_file({**owned, **PINNED})]
+        guard = _guard_file({**owned, **PINNED})
+        parameters += [params_file, guard]
+        # The guard is written with delete=False so the node can read it after this
+        # function returns; it goes when the launch does.
+        # tradeoff: a launch killed with SIGKILL emits no shutdown event and leaves
+        # the file in the temp dir; it holds only the pinned values, no secrets.
+        cleanup.append(RegisterEventHandler(OnShutdown(
+            on_shutdown=lambda event, context: pathlib.Path(guard).unlink(missing_ok=True)
+        )))
     return [
         Node(
             package="fm_teleop_policy",
@@ -123,7 +138,8 @@ def _launch_setup(context):
             name=NODE_NAME,
             output="screen",
             parameters=parameters,
-        )
+        ),
+        *cleanup,
     ]
 
 

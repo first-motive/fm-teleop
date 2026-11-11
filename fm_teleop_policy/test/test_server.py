@@ -55,12 +55,13 @@ def ros():
     rclpy.shutdown()
 
 
-def _make_node(policy=None, **overrides):
+def _make_node(policy=None, node_options=None, **overrides):
     node = PolicyServer(
         policy=policy or FakePolicy(),
         parameter_overrides=[
             Parameter(name, value=value) for name, value in overrides.items()
         ],
+        **(node_options or {}),
     )
     node._pub = RecordingPublisher()
     node._status_pub = RecordingPublisher()
@@ -555,8 +556,36 @@ def test_an_operator_gate_message_cancels_a_pending_one_shot(ros):
         node.destroy_node()
 
 
-@pytest.mark.parametrize("name", ["rate_hz", "inference_rate_hz", "status_rate_hz"])
-@pytest.mark.parametrize("rate", [0.0, -5.0])
-def test_refuses_a_rate_that_is_not_positive(ros, name, rate):
-    with pytest.raises(ValueError, match=f"^{name} must be > 0"):
-        _make_node(**{name: rate})
+@pytest.mark.parametrize(
+    "name",
+    [
+        "rate_hz", "inference_rate_hz", "status_rate_hz",
+        "chunk_timeout", "observation_timeout",
+    ],
+)
+@pytest.mark.parametrize("value", [0.0, -5.0, math.inf, math.nan])
+def test_refuses_a_rate_or_timeout_that_is_not_finite_and_positive(ros, name, value):
+    with pytest.raises(ValueError, match=f"^{name} must be finite and > 0"):
+        _make_node(**{name: value})
+
+
+@pytest.mark.parametrize(
+    "node_options",
+    [
+        {"namespace": "sim"},
+        {"cli_args": ["--ros-args", "-r", "__node:=other_server"]},
+    ],
+    ids=["namespaced", "renamed"],
+)
+def test_engage_on_start_is_refused_unless_the_node_is_policy_server(
+    ros, node_options
+):
+    # sim.launch.py's guard file is keyed by /policy_server; under any other name it
+    # would match nothing and the launch-owned parameters would be overridable.
+    node = _make_node(node_options=node_options, **SIM_ENGAGE)
+    try:
+        assert node.get_fully_qualified_name() != "/policy_server"
+        node._on_observation(_observation())
+        assert node.status()["engaged"] is False
+    finally:
+        node.destroy_node()

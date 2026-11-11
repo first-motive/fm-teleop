@@ -29,12 +29,18 @@ from fm_teleop_core.source import TeleopSource
 from fm_teleop_policy.policies import check_action, load_policy
 from fm_teleop_policy.profile import arm_joints, load_profile
 
+NODE_NAME = "policy_server"
+# sim.launch.py keys its guard params file by this name, so the launch-owned
+# parameters stay pinned only for a server that has it. engage_on_start is refused
+# anywhere else: under a namespace or a remapped name the guard would match nothing.
+FULLY_QUALIFIED_NAME = f"/{NODE_NAME}"
+
 
 class PolicyServer(TeleopSource):
     """Run a checkpoint against live observations and publish actions behind the gate."""
 
     def __init__(self, *, policy=None, **kwargs):
-        super().__init__("policy_server", **kwargs)
+        super().__init__(NODE_NAME, **kwargs)
 
         self._profile_name = self._declare(
             "robot_profile", "loader_openarm_v2",
@@ -62,21 +68,24 @@ class PolicyServer(TeleopSource):
             "inference_rate_hz", 10.0, "Model cadence: fills the action chunk."))
         status_rate_hz = float(self._declare(
             "status_rate_hz", 1.0, "Status line cadence."))
-        for name, rate in (
-            ("rate_hz", rate_hz),
-            ("inference_rate_hz", inference_rate_hz),
-            ("status_rate_hz", status_rate_hz),
-        ):
-            # Each rate becomes a timer period; refuse it here, by name, rather than
-            # with a ZeroDivisionError or a negative period.
-            if not rate > 0.0:
-                raise ValueError(f"{name} must be > 0, got {rate}.")
         self._chunk_timeout = float(self._declare(
             "chunk_timeout", 1.0,
             "Seconds an unrefilled chunk stays publishable before the node goes quiet."))
         self._observation_timeout = float(self._declare(
             "observation_timeout", 0.5,
             "Seconds without an observation before inference and publishing stop."))
+        for name, value in (
+            ("rate_hz", rate_hz),
+            ("inference_rate_hz", inference_rate_hz),
+            ("status_rate_hz", status_rate_hz),
+            ("chunk_timeout", self._chunk_timeout),
+            ("observation_timeout", self._observation_timeout),
+        ):
+            # A rate becomes a timer period, refused here by name rather than with a
+            # ZeroDivisionError. A NaN timeout never compares as exceeded, so the node
+            # would never go quiet, and an inf one is the same in effect.
+            if not (math.isfinite(value) and value > 0.0):
+                raise ValueError(f"{name} must be finite and > 0, got {value}.")
         engage_on_start = bool(self._declare(
             "engage_on_start", False,
             "Sim only: engage on the first observation, without an operator on the gate."))
@@ -109,14 +118,18 @@ class PolicyServer(TeleopSource):
         self._error = None
         # Self-engage touches this server only (no topic publish), so it can never
         # engage another server on a shared graph. It is refused unless both sim_time
-        # and sim_only say this server runs in a sim, not against a real arm.
+        # and sim_only say this server runs in a sim, not against a real arm, and
+        # unless it has the name sim.launch.py's guard file is keyed by.
         self._engage_on_first_observation = (
-            engage_on_start and sim_only and self._on_sim_time()
+            engage_on_start
+            and sim_only
+            and self._on_sim_time()
+            and self.get_fully_qualified_name() == FULLY_QUALIFIED_NAME
         )
         if engage_on_start and not self._engage_on_first_observation:
             self.get_logger().error(
-                "policy_server: engage_on_start needs use_sim_time and sim_only; "
-                "staying disengaged."
+                "policy_server: engage_on_start needs use_sim_time, sim_only and the "
+                f"node name {FULLY_QUALIFIED_NAME}; staying disengaged."
             )
 
         self.create_subscription(JointState, observation_topic, self._on_observation, 10)

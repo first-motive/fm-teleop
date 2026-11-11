@@ -69,9 +69,10 @@ act. The deferred `fm_fsm` arbiter will own that gate without a change here.
 itself, through the same path as `~/enable`, on the first observation that names
 every joint of the arm with a finite value. It does so once, so a later disengage
 holds, and the stale and finite checks below still apply. The server refuses it
-unless both `use_sim_time` and `sim_only` are true; it logs an error and stays
-disengaged. Any message on `~/enable` cancels a pending self-engage, so the
-operator's gate wins.
+unless both `use_sim_time` and `sim_only` are true and its fully qualified name is
+`/policy_server`, the name `sim.launch.py` pins its parameters under; it logs an
+error and stays disengaged. Any message on `~/enable` cancels a pending
+self-engage, so the operator's gate wins.
 
 The engage is local to this server: nothing is published, so it cannot engage
 another server. It does not by itself keep a sim run away from a real robot. That
@@ -91,7 +92,9 @@ The server adds two bounds of its own: `chunk_timeout` stops publishing when
 inference has gone quiet, and `observation_timeout` stops inference when the
 robot's state stream goes quiet, and also stops a chunk that lands after the
 stream went quiet during inference. Both are measured on the monotonic clock, so
-`use_sim_time` before `/clock` arrives cannot hold them open.
+`use_sim_time` before `/clock` arrives cannot hold them open. The server refuses
+to start unless every rate and both timeouts are finite and above zero: a NaN
+timeout would never expire.
 
 ## Run
 
@@ -137,7 +140,9 @@ range the run fails.
 `false`), `robot_profile` (required), `scenario`, and `params_file` (default
 empty). A non-empty `params_file` is applied after the server's parameters, so the
 run's overrides win. The launch then re-asserts what a run must not change: the
-engage gates, `use_sim_time`, the topics, the policy, the arm, and the profile.
+engage gates, `use_sim_time`, the topics, the policy, the arm, and the profile. It
+writes those to a temporary params file keyed by `/policy_server` and removes the
+file when the launch shuts down.
 `policy.launch.py` takes no `params_file`: no catalog entry starts it, so no run
 override reaches it. `sim.launch.py` rejects a malformed or unknown value before
 anything starts, and starts the server alone, with the zero
@@ -175,7 +180,7 @@ Every parameter is read-only after startup.
 | `status_rate_hz` | `1.0` | Status line cadence |
 | `chunk_timeout` | `1.0` | Seconds an unrefilled chunk stays publishable |
 | `observation_timeout` | `0.5` | Seconds without an observation before inference stops |
-| `engage_on_start` | `false` | Engage on the first complete, finite observation; refused unless `use_sim_time` and `sim_only` are true |
+| `engage_on_start` | `false` | Engage on the first complete, finite observation; refused unless `use_sim_time` and `sim_only` are true and the node is `/policy_server` |
 | `sim_only` | `false` | Marks a sim-launched server; `sim.launch.py` sets it by convention |
 
 ## Test
